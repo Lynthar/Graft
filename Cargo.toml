@@ -1,0 +1,63 @@
+[package]
+name = "graft"
+version = "0.1.0"
+edition = "2021"
+description = "A lightweight, self-hosted PT cross-seeding tool"
+license = "MIT"
+repository = "https://github.com/lynthar/graft"
+authors = ["Arthur Evans"]
+
+[dependencies]
+# Web framework
+axum = { version = "0.8", features = ["ws", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs", "compression-gzip", "trace"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# HTTP client (for calling downloader APIs)
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls", "multipart"] }
+
+# Torrent parsing
+lava_torrent = "0.7"
+sha1_smol = "1"
+
+# Async task scheduling
+tokio-cron-scheduler = "0.13"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Configuration
+dotenvy = "0.15"
+
+# Frontend asset embedding
+rust-embed = { version = "8", features = ["compression"] }
+
+# Configuration parsing
+toml = "0.8"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+anyhow = "1"
+async-trait = "0.1"
+urlencoding = "2"
+base64 = "0.22"
+url = "2"
+regex = "1"
+mime_guess = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

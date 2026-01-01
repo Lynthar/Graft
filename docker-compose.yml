@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  graft:
+    build: .
+    container_name: graft
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+      - RUST_LOG=graft=info
+      - GRAFT_HOST=0.0.0.0
+      - GRAFT_PORT=3000
