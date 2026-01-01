@@ -1,0 +1,24 @@
+# Graft Configuration File
+# Copy this file to config.toml and customize as needed
+
+[server]
+# Host to bind to (0.0.0.0 for all interfaces)
+host = "0.0.0.0"
+# Port to listen on
+port = 3000
+
+[database]
+# Path to SQLite database file
+path = "./data/graft.db"
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+[reseed]
+# Whether to add torrents in paused state by default
+default_paused = false
+# Request interval in milliseconds (to avoid rate limiting)
+request_interval_ms = 500
+# Maximum number of torrents to process per reseed run
+max_per_run = 100

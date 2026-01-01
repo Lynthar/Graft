@@ -1,20 +1,46 @@
-/.idea
-/.vscode
-*.log
-/iyuu_logs
-/.env
-/._.DS_Store
+# Rust
+/target/
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Data directory
+/data/
+
+# Config with secrets
+config.toml
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
 .DS_Store
-*.DS_Store
-.php_cs.cache
-/config/crontab.php
-/config/sites.php
-/plugin/admin/config/database.php
-/plugin/admin/config/thinkorm.php
-/proxy.conf
-/cookie.sh
-/rss.sh
-/public/mobile/
-/public/h5/
+Thumbs.db
 @eaDir
 /@eaDir
+
+# Node.js (frontend)
+node_modules/
+web/dist/
+
+# Logs
+*.log
+logs/
+
+# Legacy PHP code (keeping for reference)
+/_legacy/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib

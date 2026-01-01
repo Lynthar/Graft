@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles */
+.sidebar {
+  @apply w-64 min-h-screen bg-base-200 p-4;
+}
+
+.main-content {
+  @apply flex-1 p-6;
+}
+
+.card-stat {
+  @apply stat bg-base-100 shadow rounded-box;
+}
+
+.page-title {
+  @apply text-2xl font-bold mb-6;
+}
+
+.table-container {
+  @apply overflow-x-auto bg-base-100 rounded-box shadow;
+}
