@@ -1,158 +1,121 @@
-# 🌿 Graft
+# Graft
 
-A lightweight, self-hosted PT cross-seeding tool.
+[![license](https://img.shields.io/github/license/Lynthar/Graft)](LICENSE)
+[![status](https://img.shields.io/badge/status-work%20in%20progress-orange)](#status)
 
-**Graft** (嫁接) helps you automatically cross-seed torrents across multiple PT sites by matching content fingerprints locally, without relying on cloud services.
+Work-in-progress Rust rewrite of a PT cross-seeding tool. Not usable yet: the build chain is broken.
 
-## Features
+> **Read this before you clone.** The backend and frontend are written, but the
+> build doesn't complete, there are no releases, no published images, and the
+> credential handling is not fit for anything but a throwaway environment. Watch
+> it if you like; don't deploy it.
 
-- 🔒 **Privacy First**: All data stays local, no cloud dependencies
-- 🚀 **Single Binary**: One executable, no runtime dependencies
-- 🎯 **Smart Matching**: Content fingerprinting for accurate cross-site matching
-- 🌐 **Multi-Client**: Supports qBittorrent and Transmission
-- 🎨 **Modern UI**: Clean, responsive web interface
-- ⚡ **Fast**: Built with Rust for high performance
+Cross-seeding for private trackers: take a torrent you already have in one
+client, fingerprint its content, find the same content on other trackers, and add
+it back to the client.
 
-## Quick Start
+It descends from IYUUPlus. I wrote the Rust source from scratch and embedded the
+web UI in a single binary, but this repository carries the full upstream git
+history, so most of its commits are not mine. Upstream continues at
+[ledccn/iyuuplus-dev](https://github.com/ledccn/iyuuplus-dev).
 
-### Binary Release
+## Status
 
-```bash
-# Download the latest release
-wget https://github.com/lynthar/graft/releases/latest/download/graft-linux-amd64.tar.gz
-tar -xzf graft-linux-amd64.tar.gz
+**What's written**: sixteen HTTP endpoints with real implementations, working
+qBittorrent WebUI and Transmission RPC clients that genuinely add torrents, the
+preview-and-execute cross-seed flow, and six frontend pages wired to the API.
 
-# Run
-./graft
-```
+**What's broken**: `cargo build` fails. The backend embeds the frontend from
+`web/dist`, which isn't in the repository and isn't built first, so compilation
+stops there. The four CI workflows point at Dockerfiles that don't exist and have
+never run.
 
-### Docker
+**What isn't written**: the scheduler and any automatic re-seeding, RSS or
+subscriptions, notifications, tracker search, API tokens, and internationalisation.
 
-```bash
-docker run -d \
-  --name graft \
-  -p 3000:3000 \
-  -v ./data:/app/data \
-  ghcr.io/lynthar/graft:latest
-```
+## How it works
 
-### Docker Compose
+Torrents are imported from a client you already run — that's the only source of
+content, so it can only match things you already have. Each one is fingerprinted
+by file layout and size. When you ask it to cross-seed, it looks for the same
+fingerprint on the trackers you've configured, downloads the matching `.torrent`,
+and adds it back to the client pointing at the existing files.
 
-```yaml
-version: '3.8'
-services:
-  graft:
-    image: ghcr.io/lynthar/graft:latest
-    container_name: graft
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - TZ=Asia/Shanghai
-```
+Thirteen tracker templates ship with it, across three tracker platforms.
 
-## How It Works
+## Building
 
-1. **Index Building**: Import torrents from your download clients
-2. **Site Identification**: Automatically identify sites from tracker URLs
-3. **Content Fingerprinting**: Calculate fingerprints based on file structure (size, count, largest file)
-4. **Cross-Site Matching**: Find matching content across different sites locally
-5. **Reseed**: Download and add torrents to your client with correct save paths
-
-```
-┌─────────────┐
-│  Downloader │ ──→ Extract Files ──→ Calculate Fingerprint ──→ Build Index
-└─────────────┘                                                      │
-                                                                     ▼
-┌─────────────┐                                              ┌─────────────┐
-│  PT Site A  │ ◄──────── Match Fingerprints ────────────── │  PT Site B  │
-└─────────────┘                                              └─────────────┘
-```
-
-## Comparison with IYUU
-
-| Feature | IYUU | Graft |
-|---------|------|-------|
-| Hash Matching | Cloud API | **Local Database** |
-| Index Source | Cloud-maintained | **From your downloader** |
-| User Auth | WeChat binding | **None required** |
-| Deployment | PHP + MySQL | **Single binary** |
-| Site Config | Cloud-maintained | **Built-in + Community** |
-| Data Privacy | Hash uploaded | **Data stays local** |
-
-## Tech Stack
-
-- **Backend**: Rust + Axum + SQLite
-- **Frontend**: SolidJS + Tailwind CSS + DaisyUI
-- **Packaging**: Single binary / Docker
-
-## Supported Sites
-
-### Built-in Templates
-
-- **NexusPHP**: M-Team, HDSky, OurBits, PTer, HDHome, CHDBits, TTG, and more
-- **Unit3D**: Blutopia, Aither
-- **Gazelle**: Redacted, Orpheus
-
-### Custom Sites
-
-You can add custom site configurations through the web UI.
-
-## Configuration
-
-Copy `config.example.toml` to `config.toml`:
-
-```toml
-[server]
-host = "0.0.0.0"
-port = 3000
-
-[database]
-path = "./data/graft.db"
-
-[reseed]
-default_paused = false
-request_interval_ms = 500
-max_per_run = 100
-```
-
-## Development
-
-### Prerequisites
-
-- Rust 1.75+
-- Node.js 20+
-
-### Build
+Only one path currently works, because the Dockerfile builds the frontend before
+the Rust code:
 
 ```bash
-# Clone
-git clone https://github.com/lynthar/graft.git
-cd graft
+git clone https://github.com/Lynthar/Graft.git
+cd Graft
+docker compose up -d
+```
 
-# Build frontend
+Building by hand needs the same ordering:
+
+```bash
 cd web && npm install && npm run build && cd ..
-
-# Build backend
 cargo build --release
 ```
 
-### Run in development
+The instructions you'd expect — downloading a release binary, or pulling a
+published image — don't work. Neither exists.
 
-```bash
-# Terminal 1: Backend
-cargo run
+It listens on `0.0.0.0:3000` and creates `./data/graft.db` in the working
+directory.
 
-# Terminal 2: Frontend (with hot reload)
-cd web && npm run dev
-```
+## Configuration
+
+Everything is optional; the defaults work. Configuration is read from
+`config.toml`, then `./data/config.toml`, then the platform config directory,
+with environment variables taking precedence.
+
+| Key | Default |
+|---|---|
+| `server.host` | `0.0.0.0` |
+| `server.port` | `3000` |
+| `database.path` | `./data/graft.db` |
+
+`GRAFT_HOST`, `GRAFT_PORT`, `GRAFT_DATA_DIR`, `GRAFT_DB_PATH` and `RUST_LOG`
+override them.
+
+The `[reseed]` and `[logging]` sections in the example file are not read by the
+current code.
+
+## Limitations
+
+- **Cross-seeding depends on extracting a torrent id from the tracker's announce
+  URL.** Many trackers don't put one there, and when it can't be found the
+  operation fails with exactly that message. How often it succeeds in practice
+  hasn't been measured.
+- **There's no discovery.** It can only match content already present in your
+  client — no tracker search, no RSS, no shared hash database.
+- **Gazelle trackers can't actually download**: the auth key field is never
+  populated, so the download URL comes out incomplete.
+- **Custom trackers added through the UI won't be recognised** — recognition uses
+  a compiled-in table, not the database.
+- **No scheduling.** Cross-seeding is manual, one click at a time.
+- **No database migration path** — there's no version table, so a schema change
+  means handling old databases by hand.
+
+## Security
+
+**Do not expose this to any network you don't control.** As it stands:
+
+- Downloader passwords and tracker passkeys are **stored in plain text**.
+- The web UI has **no authentication of any kind**.
+- CORS is fully permissive, and it binds `0.0.0.0` by default.
+
+Together that means anyone who can reach port 3000 can read every credential you
+have entered. Until that's fixed, run it only on a host you trust completely,
+bound to loopback.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
 
-## Credits
-
-Inspired by [IYUUPlus](https://github.com/ledccn/iyuuplus-dev), rebuilt from scratch with a focus on privacy and simplicity.
+The copyright line in `LICENSE` still names the upstream PHP framework's author
+rather than this project's.
