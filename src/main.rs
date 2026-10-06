@@ -13,6 +13,7 @@ mod config;
 mod db;
 mod service;
 mod site;
+mod torrent;
 
 use api::AppState;
 use config::Settings;

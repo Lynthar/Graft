@@ -1,248 +1,318 @@
-//! Site management handlers
+//! Site handlers. Built-in and custom sites are rows of the same table and behave
+//! the same, except that built-in rows can only be disabled, not deleted.
 
 use axum::{
     extract::{Path, State},
     Json,
 };
-use serde::{Deserialize, Serialize};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::Deserialize;
 
 use crate::api::{AppError, AppState};
-use crate::site::{builtin_sites, SiteConfig, TemplateType};
-
-#[derive(Debug, Serialize)]
-pub struct SiteResponse {
-    pub id: String,
-    pub name: String,
-    pub base_url: String,
-    pub template_type: TemplateType,
-    pub has_passkey: bool,
-    pub has_cookie: bool,
-    pub enabled: bool,
-}
+use crate::site::{self, SiteView, TemplateType};
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateSiteRequest {
     pub id: String,
     pub name: String,
-    /// Base URL - optional when using builtin template (template provides default)
-    pub base_url: Option<String>,
-    #[serde(default)]
-    pub template_type: Option<TemplateType>,
+    pub base_url: String,
+    #[serde(default = "default_template")]
+    pub template_type: TemplateType,
+    pub download_pattern: Option<String>,
     pub passkey: Option<String>,
     pub cookie: Option<String>,
+    pub authkey: Option<String>,
+    /// Tracker domains; defaults to the host of `base_url`.
+    pub domains: Option<Vec<String>>,
+    pub rate_limit_rpm: Option<u32>,
+    pub daily_limit: Option<u32>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
+/// Absent fields stay as they are. For the credentials, an empty string clears the value.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateSiteRequest {
     pub name: Option<String>,
     pub base_url: Option<String>,
+    pub download_pattern: Option<String>,
     pub passkey: Option<String>,
     pub cookie: Option<String>,
+    pub authkey: Option<String>,
+    pub domains: Option<Vec<String>>,
+    pub rate_limit_rpm: Option<u32>,
+    pub daily_limit: Option<u32>,
     pub enabled: Option<bool>,
 }
 
-/// List all configured sites
-pub async fn list(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<SiteResponse>>, AppError> {
-    let conn = state.db.conn();
-    let mut stmt = conn.prepare(
-        "SELECT id, name, base_url, template_type, passkey, cookie, enabled FROM sites ORDER BY name"
-    )?;
-
-    let sites = stmt
-        .query_map([], |row| {
-            let template_str: String = row.get(3)?;
-            let passkey: Option<String> = row.get(4)?;
-            let cookie: Option<String> = row.get(5)?;
-            Ok(SiteResponse {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                base_url: row.get(2)?,
-                template_type: template_str.parse().unwrap_or(TemplateType::NexusPHP),
-                has_passkey: passkey.is_some(),
-                has_cookie: cookie.is_some(),
-                enabled: row.get::<_, i32>(6)? != 0,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(Json(sites))
+fn default_template() -> TemplateType {
+    TemplateType::NexusPHP
 }
 
-/// Get available site templates (built-in sites)
-pub async fn available() -> Json<Vec<SiteConfig>> {
-    Json(builtin_sites())
+fn default_true() -> bool {
+    true
 }
 
-/// Get a single site
-pub async fn get_one(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<SiteResponse>, AppError> {
-    let conn = state.db.conn();
-    let site = conn.query_row(
-        "SELECT id, name, base_url, template_type, passkey, cookie, enabled FROM sites WHERE id = ?1",
-        [&id],
-        |row| {
-            let template_str: String = row.get(3)?;
-            let passkey: Option<String> = row.get(4)?;
-            let cookie: Option<String> = row.get(5)?;
-            Ok(SiteResponse {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                base_url: row.get(2)?,
-                template_type: template_str.parse().unwrap_or(TemplateType::NexusPHP),
-                has_passkey: passkey.is_some(),
-                has_cookie: cookie.is_some(),
-                enabled: row.get::<_, i32>(6)? != 0,
-            })
-        },
-    ).map_err(|_| AppError::not_found("Site not found"))?;
-
-    Ok(Json(site))
+fn default_pattern(template: TemplateType) -> &'static str {
+    match template {
+        TemplateType::NexusPHP => "/download.php?id={id}&passkey={passkey}",
+        TemplateType::Unit3D => "/torrent/download/{id}.{passkey}",
+        TemplateType::Gazelle => "/torrents.php?action=download&id={id}&authkey={authkey}&torrent_pass={passkey}",
+    }
 }
 
-/// Create or configure a site
+pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<SiteView>>, AppError> {
+    let sites = site::load_all(&state.db.conn())?;
+    Ok(Json(sites.iter().map(SiteView::from).collect()))
+}
+
+pub async fn get_one(State(state): State<AppState>, Path(id): Path<String>) -> Result<Json<SiteView>, AppError> {
+    let site = site::load(&state.db.conn(), &id)?.ok_or_else(|| not_found(&id))?;
+    Ok(Json(SiteView::from(&site)))
+}
+
 pub async fn create(
     State(state): State<AppState>,
     Json(req): Json<CreateSiteRequest>,
-) -> Result<Json<SiteResponse>, AppError> {
-    // Check if site ID exists in built-in sites
-    let builtin = builtin_sites();
-    let template = builtin.iter().find(|s| s.id == req.id);
-
-    let (base_url, template_type) = if let Some(t) = template {
-        (
-            req.base_url.clone().unwrap_or_else(|| t.base_url.clone()),
-            t.template_type,
-        )
-    } else {
-        // For custom sites, base_url is required
-        let base_url = req.base_url.clone()
-            .ok_or_else(|| AppError::bad_request("base_url is required for custom sites"))?;
-        (
-            base_url,
-            req.template_type.unwrap_or(TemplateType::NexusPHP),
-        )
+) -> Result<Json<SiteView>, AppError> {
+    validate_id(&req.id)?;
+    let name = non_empty("name", &req.name)?;
+    let base_url = validate_base_url(&req.base_url)?;
+    let pattern = match &req.download_pattern {
+        Some(p) => validate_pattern(p)?,
+        None => default_pattern(req.template_type).to_string(),
     };
+    let domains = match &req.domains {
+        Some(d) => validate_domains(d)?,
+        None => vec![default_domain(&base_url)],
+    };
+    let rpm = validate_rpm(req.rate_limit_rpm.unwrap_or(10))?;
+    let daily = validate_daily(req.daily_limit.unwrap_or(20))?;
 
-    let conn = state.db.conn();
-
-    // Insert or update (upsert)
-    conn.execute(
-        "INSERT INTO sites (id, name, base_url, template_type, passkey, cookie, enabled)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
-         ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            base_url = excluded.base_url,
-            passkey = COALESCE(excluded.passkey, passkey),
-            cookie = COALESCE(excluded.cookie, cookie),
-            updated_at = datetime('now')",
-        rusqlite::params![
+    let mut conn = state.db.conn();
+    let tx = conn.transaction()?;
+    let inserted = tx.execute(
+        "INSERT INTO sites (id, name, base_url, template_type, download_pattern, passkey, cookie,
+             authkey, enabled, rate_limit_rpm, daily_limit, builtin)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)
+         ON CONFLICT(id) DO NOTHING",
+        params![
             req.id,
-            req.name,
+            name,
             base_url,
-            template_type.to_string(),
-            req.passkey,
-            req.cookie,
+            req.template_type.to_string(),
+            pattern,
+            secret(req.passkey),
+            secret(req.cookie),
+            secret(req.authkey),
+            req.enabled,
+            rpm,
+            daily
         ],
     )?;
-
-    // Also register tracker domains if it's a built-in site
-    if let Some(t) = template {
-        for domain in &t.tracker_domains {
-            let _ = conn.execute(
-                "INSERT OR IGNORE INTO tracker_domains (domain, site_id) VALUES (?1, ?2)",
-                [domain, &req.id],
-            );
-        }
+    if inserted == 0 {
+        return Err(AppError::bad_request(format!("A site with id {} already exists", req.id)));
     }
+    replace_domains(&tx, &req.id, &domains)?;
+    tx.commit()?;
 
-    Ok(Json(SiteResponse {
-        id: req.id,
-        name: req.name,
-        base_url,
-        template_type,
-        has_passkey: req.passkey.is_some(),
-        has_cookie: req.cookie.is_some(),
-        enabled: true,
-    }))
+    let site = site::load(&conn, &req.id)?.ok_or_else(|| not_found(&req.id))?;
+    Ok(Json(SiteView::from(&site)))
 }
 
-/// Update a site
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<UpdateSiteRequest>,
-) -> Result<Json<SiteResponse>, AppError> {
-    // Build and execute update in a scope to drop conn before calling get_one
-    {
-        let conn = state.db.conn();
+) -> Result<Json<SiteView>, AppError> {
+    let mut conn = state.db.conn();
+    let current = site::load(&conn, &id)?.ok_or_else(|| not_found(&id))?;
+    let name = match &req.name {
+        Some(n) => non_empty("name", n)?,
+        None => current.name.clone(),
+    };
+    let base_url = match &req.base_url {
+        Some(u) => validate_base_url(u)?,
+        None => current.base_url.clone(),
+    };
+    let pattern = match &req.download_pattern {
+        Some(p) => validate_pattern(p)?,
+        None => current.download_pattern.clone(),
+    };
+    let rpm = validate_rpm(req.rate_limit_rpm.unwrap_or(current.rate_limit_rpm))?;
+    let daily = validate_daily(req.daily_limit.unwrap_or(current.daily_limit))?;
+    let keep = |new: Option<String>, old: Option<String>| match new {
+        Some(v) => secret(Some(v)),
+        None => old,
+    };
 
-        // Build dynamic update query
-        let mut updates = Vec::new();
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE sites SET name = ?2, base_url = ?3, download_pattern = ?4, passkey = ?5, cookie = ?6,
+             authkey = ?7, enabled = ?8, rate_limit_rpm = ?9, daily_limit = ?10, updated_at = datetime('now')
+         WHERE id = ?1",
+        params![
+            id,
+            name,
+            base_url,
+            pattern,
+            keep(req.passkey, current.passkey),
+            keep(req.cookie, current.cookie),
+            keep(req.authkey, current.authkey),
+            req.enabled.unwrap_or(current.enabled),
+            rpm,
+            daily
+        ],
+    )?;
+    if let Some(domains) = &req.domains {
+        replace_domains(&tx, &id, &validate_domains(domains)?)?;
+    }
+    tx.commit()?;
 
-        if let Some(ref name) = req.name {
-            updates.push("name = ?");
-            params.push(Box::new(name.clone()));
-        }
-        if let Some(ref base_url) = req.base_url {
-            updates.push("base_url = ?");
-            params.push(Box::new(base_url.clone()));
-        }
-        if let Some(ref passkey) = req.passkey {
-            updates.push("passkey = ?");
-            params.push(Box::new(passkey.clone()));
-        }
-        if let Some(ref cookie) = req.cookie {
-            updates.push("cookie = ?");
-            params.push(Box::new(cookie.clone()));
-        }
-        if let Some(enabled) = req.enabled {
-            updates.push("enabled = ?");
-            params.push(Box::new(enabled as i32));
-        }
-
-        if updates.is_empty() {
-            return Err(AppError::bad_request("No fields to update"));
-        }
-
-        updates.push("updated_at = datetime('now')");
-        params.push(Box::new(id.clone()));
-
-        let sql = format!(
-            "UPDATE sites SET {} WHERE id = ?",
-            updates.join(", ")
-        );
-
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let rows = conn.execute(&sql, params_refs.as_slice())?;
-
-        if rows == 0 {
-            return Err(AppError::not_found("Site not found"));
-        }
-    } // conn is dropped here
-
-    // Fetch updated site
-    get_one(State(state), Path(id)).await
+    let site = site::load(&conn, &id)?.ok_or_else(|| not_found(&id))?;
+    Ok(Json(SiteView::from(&site)))
 }
 
-/// Delete a site
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let conn = state.db.conn();
-    let rows = conn.execute("DELETE FROM sites WHERE id = ?1", [&id])?;
+    let site = site::load(&conn, &id)?.ok_or_else(|| not_found(&id))?;
+    if site.builtin {
+        return Err(AppError::bad_request(format!(
+            "{} is a built-in site; disable it instead of deleting it",
+            site.name
+        )));
+    }
+    conn.execute("DELETE FROM sites WHERE id = ?1", [&id])?;
+    Ok(Json(serde_json::json!({ "deleted": true })))
+}
 
-    if rows == 0 {
-        return Err(AppError::not_found("Site not found"));
+fn not_found(id: &str) -> AppError {
+    AppError::not_found(format!("No site with id {id}"))
+}
+
+fn secret(value: Option<String>) -> Option<String> {
+    value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+fn non_empty(field: &str, value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(AppError::bad_request(format!("{field} must not be empty")));
+    }
+    Ok(value.to_string())
+}
+
+fn validate_id(id: &str) -> Result<(), AppError> {
+    let ok = (1..=32).contains(&id.len())
+        && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
+    if ok {
+        Ok(())
+    } else {
+        Err(AppError::bad_request("Site id must be 1–32 characters of a–z, 0–9, - and _"))
+    }
+}
+
+/// Requests to a site carry the passkey, so they must be encrypted unless they never
+/// leave the machine.
+fn validate_base_url(raw: &str) -> Result<String, AppError> {
+    let url = url::Url::parse(raw.trim())
+        .map_err(|_| AppError::bad_request(format!("{raw:?} is not a valid URL")))?;
+    let loopback = match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        None => false,
+    };
+    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+        return Err(AppError::bad_request("The site address must start with https://"));
+    }
+    if url.query().is_some() || url.fragment().is_some() || url.path() != "/" {
+        return Err(AppError::bad_request("The site address must be just scheme and host, e.g. https://example.org"));
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
+fn validate_pattern(pattern: &str) -> Result<String, AppError> {
+    let pattern = pattern.trim();
+    if !pattern.starts_with('/') || !pattern.contains("{id}") {
+        return Err(AppError::bad_request("The download pattern must start with / and contain {id}"));
+    }
+    Ok(pattern.to_string())
+}
+
+fn validate_domains(domains: &[String]) -> Result<Vec<String>, AppError> {
+    let mut out: Vec<String> = Vec::new();
+    for d in domains {
+        let d = d.trim().trim_end_matches('.').to_ascii_lowercase();
+        let ok = !d.is_empty()
+            && d.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+            && !d.starts_with('.');
+        if !ok {
+            return Err(AppError::bad_request(format!("{d:?} is not a valid domain")));
+        }
+        if !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    Ok(out)
+}
+
+fn default_domain(base_url: &str) -> String {
+    let host = site::host_of(base_url).unwrap_or_default();
+    host.strip_prefix("www.").map(str::to_string).unwrap_or(host)
+}
+
+fn validate_rpm(rpm: u32) -> Result<u32, AppError> {
+    if (1..=60).contains(&rpm) {
+        Ok(rpm)
+    } else {
+        Err(AppError::bad_request("Requests per minute must be between 1 and 60"))
+    }
+}
+
+fn validate_daily(limit: u32) -> Result<u32, AppError> {
+    if limit <= 1000 {
+        Ok(limit)
+    } else {
+        Err(AppError::bad_request("The daily download limit must be at most 1000"))
+    }
+}
+
+fn replace_domains(conn: &Connection, site_id: &str, domains: &[String]) -> Result<(), AppError> {
+    conn.execute("DELETE FROM site_domains WHERE site_id = ?1", [site_id])?;
+    for domain in domains {
+        let owner: Option<String> = conn
+            .query_row("SELECT site_id FROM site_domains WHERE domain = ?1", [domain], |r| r.get(0))
+            .optional()?;
+        if let Some(owner) = owner {
+            return Err(AppError::bad_request(format!("The domain {domain} already belongs to site {owner}")));
+        }
+        conn.execute("INSERT INTO site_domains (domain, site_id) VALUES (?1, ?2)", [domain, site_id])?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn site_address_must_be_https_unless_loopback() {
+        assert_eq!(validate_base_url("https://pt.example.org/").unwrap(), "https://pt.example.org");
+        assert!(validate_base_url("http://pt.example.org").is_err());
+        assert!(validate_base_url("http://127.0.0.1:8080").is_ok());
+        assert!(validate_base_url("https://pt.example.org/torrents.php").is_err());
     }
 
-    // Also remove tracker domain mappings
-    conn.execute("DELETE FROM tracker_domains WHERE site_id = ?1", [&id])?;
-
-    Ok(Json(serde_json::json!({"deleted": true})))
+    #[test]
+    fn domains_are_normalised_and_checked() {
+        assert_eq!(validate_domains(&["Tracker.Example.org.".into()]).unwrap(), vec!["tracker.example.org"]);
+        assert!(validate_domains(&["exa mple.org".into()]).is_err());
+        assert_eq!(default_domain("https://www.example.org"), "example.org");
+    }
 }

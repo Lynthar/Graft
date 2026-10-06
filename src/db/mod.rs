@@ -152,7 +152,8 @@ mod tests {
         let conn = migrated();
         let insert = |template: &str| {
             conn.execute(
-                "INSERT INTO sites (id, name, base_url, template_type) VALUES (?1, 's', 'https://s', ?1)",
+                "INSERT INTO sites (id, name, base_url, template_type, download_pattern)
+                 VALUES (?1, 's', 'https://s', ?1, '/d?id={id}')",
                 [template],
             )
         };

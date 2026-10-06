@@ -1,106 +1,179 @@
-import { Component, createSignal, createResource, For, Show } from 'solid-js';
-import { fetchSites, fetchAvailableSites, createSite, deleteSite, type AvailableSite } from '../api/sites';
+import { Component, createResource, createSignal, For, Show } from 'solid-js';
+import { createSite, deleteSite, fetchSites, updateSite, type Site } from '../api/sites';
+
+interface FormState {
+  id: string;
+  name: string;
+  base_url: string;
+  template_type: string;
+  download_pattern: string;
+  domains: string;
+  passkey: string;
+  cookie: string;
+  authkey: string;
+  rate_limit_rpm: number;
+  daily_limit: number;
+  enabled: boolean;
+}
+
+const emptyForm = (): FormState => ({
+  id: '',
+  name: '',
+  base_url: 'https://',
+  template_type: 'nexusphp',
+  download_pattern: '',
+  domains: '',
+  passkey: '',
+  cookie: '',
+  authkey: '',
+  rate_limit_rpm: 10,
+  daily_limit: 20,
+  enabled: true,
+});
 
 const Sites: Component = () => {
   const [sites, { refetch }] = createResource(fetchSites);
-  const [availableSites] = createResource(fetchAvailableSites);
-  const [showModal, setShowModal] = createSignal(false);
+  // null: closed; 'new': adding a custom site; otherwise the site being edited
+  const [editing, setEditing] = createSignal<Site | 'new' | null>(null);
+  const [form, setForm] = createSignal<FormState>(emptyForm());
+  const [error, setError] = createSignal('');
 
-  const [form, setForm] = createSignal({
-    id: '',
-    name: '',
-    passkey: '',
-    cookie: '',
-  });
+  const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm({ ...form(), [key]: value });
 
-  const [selectedTemplate, setSelectedTemplate] = createSignal<AvailableSite | null>(null);
+  const openNew = () => {
+    setForm(emptyForm());
+    setError('');
+    setEditing('new');
+  };
 
-  const handleSelectTemplate = (template: AvailableSite) => {
-    setSelectedTemplate(template);
+  const openEdit = (site: Site) => {
     setForm({
-      id: template.id,
-      name: template.name,
-      passkey: '',
-      cookie: '',
+      ...emptyForm(),
+      id: site.id,
+      name: site.name,
+      base_url: site.base_url,
+      template_type: site.template_type,
+      download_pattern: site.download_pattern,
+      domains: site.domains.join(', '),
+      rate_limit_rpm: site.rate_limit_rpm,
+      daily_limit: site.daily_limit,
+      enabled: site.enabled,
     });
+    setError('');
+    setEditing(site);
   };
 
-  const handleSubmit = async (e: Event) => {
+  const domainList = () => form().domains.split(/[,\s]+/).map((d) => d.trim()).filter(Boolean);
+
+  const save = async (e: Event) => {
     e.preventDefault();
-    const template = selectedTemplate();
-    if (!template) return;
-
-    await createSite({
-      id: form().id,
-      name: form().name,
-      base_url: template.base_url,
-      passkey: form().passkey || undefined,
-      cookie: form().cookie || undefined,
-    });
-
-    setShowModal(false);
-    setSelectedTemplate(null);
-    setForm({ id: '', name: '', passkey: '', cookie: '' });
-    refetch();
-  };
-
-  const handleDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this site?')) {
-      await deleteSite(id);
+    const f = form();
+    const current = editing();
+    try {
+      if (current === 'new') {
+        await createSite({
+          id: f.id,
+          name: f.name,
+          base_url: f.base_url,
+          template_type: f.template_type,
+          download_pattern: f.download_pattern || undefined,
+          domains: domainList().length ? domainList() : undefined,
+          passkey: f.passkey || undefined,
+          cookie: f.cookie || undefined,
+          authkey: f.authkey || undefined,
+          rate_limit_rpm: f.rate_limit_rpm,
+          daily_limit: f.daily_limit,
+          enabled: f.enabled,
+        });
+      } else if (current) {
+        // Credentials left blank keep their stored value.
+        await updateSite(current.id, {
+          name: f.name,
+          base_url: f.base_url,
+          download_pattern: f.download_pattern,
+          domains: domainList(),
+          passkey: f.passkey || undefined,
+          cookie: f.cookie || undefined,
+          authkey: f.authkey || undefined,
+          rate_limit_rpm: f.rate_limit_rpm,
+          daily_limit: f.daily_limit,
+          enabled: f.enabled,
+        });
+      }
+      setEditing(null);
       refetch();
+    } catch (err) {
+      setError((err as Error).message);
     }
   };
+
+  const toggle = async (site: Site) => {
+    try {
+      await updateSite(site.id, { enabled: !site.enabled });
+      refetch();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  };
+
+  const remove = async (site: Site) => {
+    if (!confirm(`Delete ${site.name}?`)) return;
+    try {
+      await deleteSite(site.id);
+      refetch();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  };
+
+  const isNew = () => editing() === 'new';
 
   return (
     <div>
       <div class="flex justify-between items-center mb-6">
         <h1 class="page-title mb-0">PT Sites</h1>
-        <button class="btn btn-primary" onClick={() => setShowModal(true)}>
-          Add Site
-        </button>
+        <button class="btn btn-primary" onClick={openNew}>Add custom site</button>
       </div>
 
-      {/* Sites Table */}
+      <p class="mb-4 text-base-content/70">
+        Built-in sites are listed disabled. Edit one to store your passkey, then enable it. Only NexusPHP sites can
+        be searched by content; credentials are stored in plain text in the database file.
+      </p>
+
       <div class="table-container">
         <table class="table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>ID</th>
-              <th>Template</th>
+              <th>Site</th>
+              <th>Type</th>
+              <th>Tracker domains</th>
               <th>Passkey</th>
-              <th>Status</th>
-              <th>Actions</th>
+              <th>Limits</th>
+              <th>Enabled</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             <For each={sites()}>
               {(site) => (
                 <tr>
-                  <td class="font-medium">{site.name}</td>
-                  <td><code class="text-xs">{site.id}</code></td>
                   <td>
-                    <span class="badge badge-outline">{site.template_type}</span>
+                    <div class="font-medium">{site.name}</div>
+                    <div class="text-xs text-base-content/60">{site.base_url}</div>
                   </td>
+                  <td><span class="badge badge-outline">{site.template_type}</span></td>
+                  <td class="text-xs">{site.domains.join(', ')}</td>
+                  <td>{site.has_passkey ? '✓' : '—'}</td>
+                  <td class="text-xs">{site.rate_limit_rpm}/min · {site.daily_limit}/day</td>
                   <td>
-                    {site.has_passkey ? (
-                      <span class="badge badge-success badge-sm">Configured</span>
-                    ) : (
-                      <span class="badge badge-warning badge-sm">Missing</span>
-                    )}
+                    <input type="checkbox" class="toggle toggle-success toggle-sm" checked={site.enabled}
+                      onChange={() => toggle(site)} />
                   </td>
-                  <td>
-                    <span class={`badge ${site.enabled ? 'badge-success' : 'badge-ghost'}`}>
-                      {site.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </td>
-                  <td>
-                    <button
-                      class="btn btn-sm btn-error btn-outline"
-                      onClick={() => handleDelete(site.id)}
-                    >
-                      Delete
-                    </button>
+                  <td class="whitespace-nowrap">
+                    <button class="btn btn-sm btn-ghost" onClick={() => openEdit(site)}>Edit</button>
+                    <Show when={!site.builtin}>
+                      <button class="btn btn-sm btn-error btn-outline" onClick={() => remove(site)}>Delete</button>
+                    </Show>
                   </td>
                 </tr>
               )}
@@ -109,88 +182,82 @@ const Sites: Component = () => {
         </table>
       </div>
 
-      {/* Add Site Modal */}
-      <Show when={showModal()}>
+      <Show when={editing()}>
         <div class="modal modal-open">
-          <div class="modal-box max-w-3xl">
-            <h3 class="font-bold text-lg mb-4">Add PT Site</h3>
-
-            <Show
-              when={selectedTemplate()}
-              fallback={
-                <div>
-                  <p class="mb-4 text-base-content/70">Select a site template:</p>
-                  <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
-                    <For each={availableSites()}>
-                      {(site) => (
-                        <button
-                          class="btn btn-outline h-auto py-4 flex-col"
-                          onClick={() => handleSelectTemplate(site)}
-                        >
-                          <span class="font-bold">{site.name}</span>
-                          <span class="text-xs opacity-70">{site.template_type}</span>
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                  <div class="modal-action">
-                    <button class="btn" onClick={() => setShowModal(false)}>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              }
-            >
-              <form onSubmit={handleSubmit}>
-                <div class="alert alert-info mb-4">
-                  <span>Configuring: <strong>{selectedTemplate()?.name}</strong></span>
-                </div>
-
-                <div class="form-control mb-4">
-                  <label class="label">
-                    <span class="label-text">Passkey</span>
+          <div class="modal-box max-w-xl">
+            <h3 class="font-bold text-lg mb-4">{isNew() ? 'Add custom site' : `Edit ${form().name}`}</h3>
+            <form onSubmit={save} class="space-y-3">
+              <Show when={isNew()}>
+                <div class="grid grid-cols-2 gap-3">
+                  <label class="form-control">
+                    <span class="label-text">Id (a–z, 0–9, -, _)</span>
+                    <input class="input input-bordered" value={form().id} onInput={(e) => set('id', e.currentTarget.value)} required />
                   </label>
-                  <input
-                    type="text"
-                    class="input input-bordered"
-                    value={form().passkey}
-                    onInput={(e) => setForm({ ...form(), passkey: e.currentTarget.value })}
-                    placeholder="Your passkey from the site"
-                  />
-                  <label class="label">
-                    <span class="label-text-alt">Find this in your site profile settings</span>
+                  <label class="form-control">
+                    <span class="label-text">Type</span>
+                    <select class="select select-bordered" value={form().template_type}
+                      onChange={(e) => set('template_type', e.currentTarget.value)}>
+                      <option value="nexusphp">nexusphp</option>
+                      <option value="unit3d">unit3d</option>
+                      <option value="gazelle">gazelle</option>
+                    </select>
                   </label>
                 </div>
-
-                <div class="form-control mb-4">
-                  <label class="label">
-                    <span class="label-text">Cookie (optional)</span>
-                  </label>
-                  <textarea
-                    class="textarea textarea-bordered"
-                    value={form().cookie}
-                    onInput={(e) => setForm({ ...form(), cookie: e.currentTarget.value })}
-                    placeholder="Cookie string (for sites that require it)"
-                    rows={2}
-                  />
-                </div>
-
-                <div class="modal-action">
-                  <button type="button" class="btn" onClick={() => {
-                    setSelectedTemplate(null);
-                    setShowModal(false);
-                  }}>
-                    Cancel
-                  </button>
-                  <button type="button" class="btn btn-ghost" onClick={() => setSelectedTemplate(null)}>
-                    Back
-                  </button>
-                  <button type="submit" class="btn btn-primary">
-                    Add Site
-                  </button>
-                </div>
-              </form>
-            </Show>
+              </Show>
+              <label class="form-control">
+                <span class="label-text">Name</span>
+                <input class="input input-bordered" value={form().name} onInput={(e) => set('name', e.currentTarget.value)} required />
+              </label>
+              <label class="form-control">
+                <span class="label-text">Address (https only)</span>
+                <input class="input input-bordered" value={form().base_url} onInput={(e) => set('base_url', e.currentTarget.value)} required />
+              </label>
+              <label class="form-control">
+                <span class="label-text">Tracker domains (comma separated; subdomains match too)</span>
+                <input class="input input-bordered" value={form().domains} placeholder="defaults to the address's domain"
+                  onInput={(e) => set('domains', e.currentTarget.value)} />
+              </label>
+              <label class="form-control">
+                <span class="label-text">Download pattern ({'{id}'}, {'{passkey}'}, {'{authkey}'})</span>
+                <input class="input input-bordered font-mono text-sm" value={form().download_pattern}
+                  placeholder="default for the type" onInput={(e) => set('download_pattern', e.currentTarget.value)} />
+              </label>
+              <label class="form-control">
+                <span class="label-text">Passkey {isNew() ? '' : '(leave blank to keep the stored one)'}</span>
+                <input type="password" class="input input-bordered" value={form().passkey}
+                  onInput={(e) => set('passkey', e.currentTarget.value)} autocomplete="off" />
+              </label>
+              <Show when={form().template_type === 'gazelle'}>
+                <label class="form-control">
+                  <span class="label-text">Authkey</span>
+                  <input type="password" class="input input-bordered" value={form().authkey}
+                    onInput={(e) => set('authkey', e.currentTarget.value)} autocomplete="off" />
+                </label>
+              </Show>
+              <div class="grid grid-cols-2 gap-3">
+                <label class="form-control">
+                  <span class="label-text">Requests per minute (1–60)</span>
+                  <input type="number" min="1" max="60" class="input input-bordered" value={form().rate_limit_rpm}
+                    onInput={(e) => set('rate_limit_rpm', Number(e.currentTarget.value))} />
+                </label>
+                <label class="form-control">
+                  <span class="label-text">Downloads per day</span>
+                  <input type="number" min="0" max="1000" class="input input-bordered" value={form().daily_limit}
+                    onInput={(e) => set('daily_limit', Number(e.currentTarget.value))} />
+                </label>
+              </div>
+              <label class="label cursor-pointer justify-start gap-3">
+                <input type="checkbox" class="checkbox" checked={form().enabled} onChange={(e) => set('enabled', e.currentTarget.checked)} />
+                <span class="label-text">Enabled</span>
+              </label>
+              <Show when={error()}>
+                <div class="alert alert-error text-sm">{error()}</div>
+              </Show>
+              <div class="modal-action">
+                <button type="button" class="btn btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+              </div>
+            </form>
           </div>
         </div>
       </Show>

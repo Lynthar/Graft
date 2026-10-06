@@ -11,14 +11,4 @@ port = 3000
 # Path to SQLite database file
 path = "./data/graft.db"
 
-[logging]
-# Log level: trace, debug, info, warn, error
-level = "info"
-
-[reseed]
-# Whether to add torrents in paused state by default
-default_paused = false
-# Request interval in milliseconds (to avoid rate limiting)
-request_interval_ms = 500
-# Maximum number of torrents to process per reseed run
-max_per_run = 100
+# Log verbosity is set with the RUST_LOG environment variable, e.g. RUST_LOG=graft=debug.

@@ -2,7 +2,7 @@ import { Component, createResource, For } from 'solid-js';
 import { fetchHistory } from '../api/reseed';
 
 const History: Component = () => {
-  const [history] = createResource(() => fetchHistory({ limit: 100 }));
+  const [history] = createResource(() => fetchHistory(100));
 
   return (
     <div>
@@ -13,25 +13,26 @@ const History: Component = () => {
           <thead>
             <tr>
               <th>Time</th>
-              <th>Source</th>
+              <th>Torrent</th>
               <th>Target</th>
               <th>Status</th>
-              <th>Message</th>
+              <th>Detail</th>
             </tr>
           </thead>
           <tbody>
             <For each={history()}>
               {(entry) => (
                 <tr>
-                  <td class="text-sm">{new Date(entry.created_at).toLocaleString()}</td>
-                  <td>
-                    <code class="text-xs">{entry.info_hash.substring(0, 8)}...</code>
+                  <td class="text-sm">{new Date(entry.created_at.replace(' ', 'T') + 'Z').toLocaleString()}</td>
+                  <td class="max-w-xs truncate" title={entry.source_name}>
+                    {entry.source_name}
                     {entry.source_site && (
                       <span class="badge badge-ghost badge-sm ml-2">{entry.source_site}</span>
                     )}
                   </td>
                   <td>
                     <span class="badge badge-outline badge-sm">{entry.target_site}</span>
+                    <span class="text-xs ml-1">#{entry.target_torrent_id}</span>
                   </td>
                   <td>
                     <span class={`badge ${
@@ -41,8 +42,9 @@ const History: Component = () => {
                       {entry.status}
                     </span>
                   </td>
-                  <td class="text-sm text-base-content/70 max-w-xs truncate">
-                    {entry.message || '-'}
+                  <td class="text-sm text-base-content/70 max-w-md" title={entry.message}>
+                    <span class="font-mono text-xs mr-1">{entry.step}</span>
+                    {entry.message}
                   </td>
                 </tr>
               )}

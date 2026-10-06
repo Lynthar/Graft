@@ -1,7 +1,6 @@
 //! API request handlers
 
 pub mod client;
-pub mod index;
 pub mod reseed;
 pub mod site;
 
@@ -24,47 +23,22 @@ pub async fn health() -> Json<serde_json::Value> {
     }))
 }
 
-/// Dashboard stats
+/// Dashboard stats; "today" is the server's local day.
 pub async fn stats(
     axum::extract::State(state): axum::extract::State<super::AppState>,
 ) -> Result<Json<serde_json::Value>, super::AppError> {
-    let index_stats = state.index_service.get_stats()?;
-
-    // Get client count
-    let client_count: i64 = state.db.conn().query_row(
-        "SELECT COUNT(*) FROM clients",
-        [],
-        |row| row.get(0),
-    )?;
-
-    // Get site count
-    let site_count: i64 = state.db.conn().query_row(
-        "SELECT COUNT(*) FROM sites WHERE enabled = 1",
-        [],
-        |row| row.get(0),
-    )?;
-
-    // Get recent history stats
-    let today_success: i64 = state.db.conn().query_row(
-        "SELECT COUNT(*) FROM reseed_history WHERE status = 'success' AND date(created_at) = date('now')",
-        [],
-        |row| row.get(0),
-    )?;
-
-    let today_failed: i64 = state.db.conn().query_row(
-        "SELECT COUNT(*) FROM reseed_history WHERE status = 'failed' AND date(created_at) = date('now')",
-        [],
-        |row| row.get(0),
-    )?;
+    let conn = state.db.conn();
+    let count = |sql: &str| -> rusqlite::Result<i64> { conn.query_row(sql, [], |row| row.get(0)) };
+    let today = "date(created_at, 'localtime') = date('now', 'localtime')";
 
     Ok(Json(json!({
-        "index": index_stats,
-        "clients": client_count,
-        "sites": site_count,
+        "clients": count("SELECT COUNT(*) FROM clients")?,
+        "sites": count("SELECT COUNT(*) FROM sites WHERE enabled = 1")?,
         "today": {
-            "success": today_success,
-            "failed": today_failed,
-        }
+            "success": count(&format!("SELECT COUNT(*) FROM reseed_results WHERE status = 'success' AND {today}"))?,
+            "failed": count(&format!("SELECT COUNT(*) FROM reseed_results WHERE status = 'failed' AND {today}"))?,
+        },
+        "total_success": count("SELECT COUNT(*) FROM reseed_results WHERE status = 'success'")?,
     })))
 }
 

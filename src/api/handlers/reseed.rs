@@ -1,31 +1,137 @@
-//! Reseed operation handlers
+//! Reseed handlers: preview and execution run as background tasks.
+
+use std::collections::HashSet;
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
+    http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::handlers::client::load_client;
 use crate::api::{AppError, AppState};
-use crate::client::{ClientConfig, ClientType};
-use crate::service::{PreviewResult, ReseedRequest, ReseedResult};
-use crate::site::SiteConfig;
+use crate::client::ClientType;
+use crate::service::tasks::Snapshot;
+use crate::service::ExecuteRun;
+use crate::site;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewRequest {
     pub source_client_id: String,
     pub target_site_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecuteRequest {
-    pub source_client_id: String,
+    pub preview_id: String,
     pub target_client_id: String,
-    pub target_site_ids: Vec<String>,
+    /// Candidates confirmed in the preview; nothing else is executed.
+    pub candidate_ids: Vec<usize>,
+    /// Candidates flagged `needs_confirmation` must also be listed here.
     #[serde(default)]
-    pub add_paused: bool,
-    #[serde(default)]
-    pub skip_checking: bool,
+    pub confirmed_risky_ids: Vec<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Started {
+    pub task_id: String,
+}
+
+pub async fn preview(
+    State(state): State<AppState>,
+    Json(req): Json<PreviewRequest>,
+) -> Result<Json<Started>, AppError> {
+    let source = load_client(&state, &req.source_client_id)?;
+    if source.client_type != ClientType::QBittorrent {
+        return Err(AppError::bad_request(
+            "Only qBittorrent can be the source: Transmission does not report piece hashes",
+        ));
+    }
+    if req.target_site_ids.is_empty() {
+        return Err(AppError::bad_request("Choose at least one target site"));
+    }
+    let mut targets = Vec::new();
+    {
+        let conn = state.db.conn();
+        for id in &req.target_site_ids {
+            match site::load(&conn, id)? {
+                Some(s) if s.enabled => targets.push(s),
+                Some(s) => return Err(AppError::bad_request(format!("The site {} ({id}) is not enabled", s.name))),
+                None => return Err(AppError::bad_request(format!("No site with id {id}"))),
+            }
+        }
+    }
+
+    let service = state.reseed.clone();
+    let task = state.tasks.spawn("preview", move |task| async move {
+        let preview = service.preview(&task, source, targets).await?;
+        service.keep_preview(&task.id, preview.clone());
+        Ok(preview)
+    });
+    Ok(Json(Started { task_id: task.id.clone() }))
+}
+
+pub async fn execute(
+    State(state): State<AppState>,
+    Json(req): Json<ExecuteRequest>,
+) -> Result<Json<Started>, AppError> {
+    let preview = state.reseed.preview_result(&req.preview_id).ok_or_else(|| {
+        AppError::bad_request("That preview is no longer available; run the preview again")
+    })?;
+    let source = load_client(&state, &preview.source_client_id)?;
+    let target = load_client(&state, &req.target_client_id)?;
+
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+    for id in &req.candidate_ids {
+        if !seen.insert(*id) {
+            continue;
+        }
+        let candidate = preview
+            .candidates
+            .iter()
+            .find(|c| c.id == *id)
+            .ok_or_else(|| AppError::bad_request(format!("The preview has no candidate {id}")))?;
+        if candidate.needs_confirmation && !req.confirmed_risky_ids.contains(id) {
+            return Err(AppError::bad_request(format!(
+                "Candidate {id} ({}) needs its own confirmation: {}",
+                candidate.source_name, candidate.note
+            )));
+        }
+        candidates.push(candidate.clone());
+    }
+    if candidates.is_empty() {
+        return Err(AppError::bad_request("No candidates were confirmed"));
+    }
+    let busy = state.reseed.claim_target(&target.id).ok_or_else(|| {
+        AppError::new(StatusCode::CONFLICT, format!("A reseed into {} is already running", target.name))
+    })?;
+
+    let service = state.reseed.clone();
+    let run = ExecuteRun { candidates, source, target, busy };
+    let task = state.tasks.spawn("execute", move |task| async move { service.execute(&task, run).await });
+    Ok(Json(Started { task_id: task.id.clone() }))
+}
+
+pub async fn task_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Snapshot>, AppError> {
+    let task = state.tasks.get(&id).ok_or_else(|| AppError::not_found("No such task"))?;
+    Ok(Json(task.snapshot()))
+}
+
+pub async fn task_cancel(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !state.tasks.cancel(&id) {
+        return Err(AppError::not_found("No such task"));
+    }
+    Ok(Json(serde_json::json!({ "cancelling": true })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,175 +150,49 @@ fn default_limit() -> i64 {
 #[derive(Debug, Serialize)]
 pub struct HistoryEntry {
     pub id: i64,
-    pub info_hash: String,
+    pub run_id: String,
+    pub source_name: String,
     pub source_site: Option<String>,
     pub target_site: String,
+    pub target_torrent_id: String,
+    pub target_client: String,
     pub status: String,
-    pub message: Option<String>,
+    pub step: String,
+    pub message: String,
     pub created_at: String,
 }
 
-/// Preview reseed matches
-pub async fn preview(
-    State(state): State<AppState>,
-    Json(req): Json<PreviewRequest>,
-) -> Result<Json<PreviewResult>, AppError> {
-    // Get source client
-    let source_config = get_client_config(&state, &req.source_client_id)?;
-    let source_client = source_config.create_client();
-
-    // Get target sites
-    let sites = get_site_configs(&state, &req.target_site_ids)?;
-
-    // Run preview
-    let result = state.reseed_service
-        .preview(source_client.as_ref(), &sites)
-        .await?;
-
-    Ok(Json(result))
-}
-
-/// Execute reseed operation
-pub async fn execute(
-    State(state): State<AppState>,
-    Json(req): Json<ExecuteRequest>,
-) -> Result<Json<ReseedResult>, AppError> {
-    // Get source client
-    let source_config = get_client_config(&state, &req.source_client_id)?;
-    let source_client = source_config.create_client();
-
-    // Get target client
-    let target_config = get_client_config(&state, &req.target_client_id)?;
-    let target_client = target_config.create_client();
-
-    // Get target sites
-    let sites = get_site_configs(&state, &req.target_site_ids)?;
-
-    // Build request
-    let reseed_req = ReseedRequest {
-        task_id: None,
-        add_paused: req.add_paused,
-        skip_checking: req.skip_checking,
-    };
-
-    // Execute
-    let result = state.reseed_service
-        .execute(reseed_req, source_client.as_ref(), target_client.as_ref(), &sites)
-        .await?;
-
-    Ok(Json(result))
-}
-
-/// Get reseed history
 pub async fn history(
     State(state): State<AppState>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<Vec<HistoryEntry>>, AppError> {
     let conn = state.db.conn();
-
-    let entries = if let Some(ref status) = query.status {
-        let sql = "SELECT id, info_hash, source_site, target_site, status, message, created_at
-             FROM reseed_history
-             WHERE status = ?1
-             ORDER BY created_at DESC
-             LIMIT ?2 OFFSET ?3";
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map(rusqlite::params![status, query.limit, query.offset], |row| {
-            Ok(HistoryEntry {
-                id: row.get(0)?,
-                info_hash: row.get(1)?,
-                source_site: row.get(2)?,
-                target_site: row.get(3)?,
-                status: row.get(4)?,
-                message: row.get(5)?,
-                created_at: row.get(6)?,
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    } else {
-        let sql = "SELECT id, info_hash, source_site, target_site, status, message, created_at
-         FROM reseed_history
-         ORDER BY created_at DESC
-         LIMIT ?1 OFFSET ?2";
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map(rusqlite::params![query.limit, query.offset], |row| {
-            Ok(HistoryEntry {
-                id: row.get(0)?,
-                info_hash: row.get(1)?,
-                source_site: row.get(2)?,
-                target_site: row.get(3)?,
-                status: row.get(4)?,
-                message: row.get(5)?,
-                created_at: row.get(6)?,
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
-
-    Ok(Json(entries))
-}
-
-/// Helper to get client config from database
-fn get_client_config(state: &AppState, id: &str) -> Result<ClientConfig, AppError> {
-    let conn = state.db.conn();
-    conn.query_row(
-        "SELECT id, name, client_type, host, port, username, password, use_https FROM clients WHERE id = ?1",
-        [id],
-        |row| {
-            let client_type_str: String = row.get(2)?;
-            Ok(ClientConfig {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                client_type: client_type_str.parse().unwrap_or(ClientType::QBittorrent),
-                host: row.get(3)?,
-                port: row.get(4)?,
-                username: row.get(5)?,
-                password: row.get(6)?,
-                use_https: row.get::<_, i32>(7)? != 0,
-            })
-        },
-    ).map_err(|_| AppError::not_found("Client not found"))
-}
-
-/// Helper to get site configs from database
-fn get_site_configs(state: &AppState, site_ids: &[String]) -> Result<Vec<SiteConfig>, AppError> {
-    let conn = state.db.conn();
-    let mut sites = Vec::new();
-
-    for site_id in site_ids {
-        let site = conn.query_row(
-            "SELECT id, name, base_url, template_type, passkey, cookie, enabled, rate_limit_rpm
-             FROM sites WHERE id = ?1 AND enabled = 1",
-            [site_id],
-            |row| {
-                let template_str: String = row.get(3)?;
-                Ok(SiteConfig {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    base_url: row.get(2)?,
-                    template_type: template_str.parse().unwrap_or(crate::site::TemplateType::NexusPHP),
-                    tracker_domains: Vec::new(), // Not needed for download
-                    download_pattern: get_download_pattern(&template_str),
-                    passkey: row.get(4)?,
-                    cookie: row.get(5)?,
-                    enabled: row.get::<_, i32>(6)? != 0,
-                    rate_limit_rpm: row.get(7)?,
+    let mut stmt = conn.prepare(
+        "SELECT id, run_id, source_name, source_site, target_site, target_torrent_id, target_client,
+                status, step, message, created_at
+         FROM reseed_results
+         WHERE ?1 IS NULL OR status = ?1
+         ORDER BY id DESC LIMIT ?2 OFFSET ?3",
+    )?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![query.status, query.limit.clamp(1, 500), query.offset.max(0)],
+            |r| {
+                Ok(HistoryEntry {
+                    id: r.get(0)?,
+                    run_id: r.get(1)?,
+                    source_name: r.get(2)?,
+                    source_site: r.get(3)?,
+                    target_site: r.get(4)?,
+                    target_torrent_id: r.get(5)?,
+                    target_client: r.get(6)?,
+                    status: r.get(7)?,
+                    step: r.get(8)?,
+                    message: r.get(9)?,
+                    created_at: r.get(10)?,
                 })
             },
-        );
-
-        if let Ok(site) = site {
-            sites.push(site);
-        }
-    }
-
-    Ok(sites)
-}
-
-fn get_download_pattern(template_type: &str) -> String {
-    match template_type {
-        "unit3d" => "/torrent/download/{id}.{passkey}".to_string(),
-        "gazelle" => "/torrents.php?action=download&id={id}&authkey={authkey}&torrent_pass={passkey}".to_string(),
-        _ => "/download.php?id={id}&passkey={passkey}".to_string(),
-    }
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(rows))
 }

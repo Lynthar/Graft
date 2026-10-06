@@ -12,6 +12,9 @@ pub use unit3d::Unit3DTemplate;
 pub use gazelle::GazelleTemplate;
 
 use async_trait::async_trait;
+
+use crate::site::Site;
+use crate::torrent::MAX_TORRENT_BYTES;
 use serde::{Deserialize, Serialize};
 
 /// Template type enum
@@ -52,9 +55,6 @@ pub enum TemplateError {
     #[error("Missing passkey")]
     MissingPasskey,
 
-    #[error("Missing cookie")]
-    MissingCookie,
-
     #[error("Missing authkey")]
     MissingAuthkey,
 
@@ -77,14 +77,56 @@ impl From<reqwest::Error> for TemplateError {
 
 pub type Result<T> = std::result::Result<T, TemplateError>;
 
+/// Fill a site's download pattern. A placeholder whose value is not stored is an error,
+/// so a half-filled URL is never requested.
+pub(crate) fn fill_pattern(site: &Site, torrent_id: &str) -> Result<String> {
+    let mut path = site.download_pattern.replace("{id}", torrent_id);
+    if path.contains("{passkey}") {
+        path = path.replace("{passkey}", site.passkey.as_deref().ok_or(TemplateError::MissingPasskey)?);
+    }
+    if path.contains("{authkey}") {
+        path = path.replace("{authkey}", site.authkey.as_deref().ok_or(TemplateError::MissingAuthkey)?);
+    }
+    Ok(format!("{}{}", site.base_url, path))
+}
+
+/// GET a `.torrent` with the site's cookie. Login pages and bodies over
+/// [`MAX_TORRENT_BYTES`] are errors; the bytes are otherwise unchecked.
+pub(crate) async fn fetch_torrent(http: &reqwest::Client, site: &Site, torrent_id: &str) -> Result<Vec<u8>> {
+    let url = fill_pattern(site, torrent_id)?;
+    let mut request = http.get(&url).header("User-Agent", concat!("Graft/", env!("CARGO_PKG_VERSION")));
+    if let Some(ref cookie) = site.cookie {
+        request = request.header("Cookie", cookie);
+    }
+    let mut response = request.send().await?;
+    if !response.status().is_success() {
+        return Err(TemplateError::DownloadFailed(format!("HTTP {}", response.status())));
+    }
+    let is_html = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("text/html"));
+    if is_html {
+        return Err(TemplateError::InvalidResponse(
+            "the site answered with a web page instead of a torrent (login expired or no access?)".into(),
+        ));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > MAX_TORRENT_BYTES {
+            return Err(TemplateError::InvalidResponse("the torrent file is too large".into()));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 /// Site template trait
 ///
 /// Defines the interface for interacting with PT sites
 #[async_trait]
 pub trait SiteTemplate: Send + Sync {
-    /// Build download URL for a torrent
-    fn build_download_url(&self, torrent_id: &str) -> Result<String>;
-
     /// Download a torrent file
     async fn download_torrent(
         &self,
@@ -96,20 +138,22 @@ pub trait SiteTemplate: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::site::SiteConfig;
 
-    fn site(template_type: TemplateType, base_url: &str, download_pattern: &str) -> SiteConfig {
-        SiteConfig {
+    fn site(template_type: TemplateType, base_url: &str, download_pattern: &str) -> Site {
+        Site {
             id: "test".to_string(),
             name: "Test".to_string(),
             base_url: base_url.to_string(),
             template_type,
-            tracker_domains: Vec::new(),
             download_pattern: download_pattern.to_string(),
             passkey: Some("SECRET_PASSKEY".to_string()),
             cookie: None,
+            authkey: None,
             enabled: true,
-            rate_limit_rpm: None,
+            rate_limit_rpm: 10,
+            daily_limit: 20,
+            builtin: false,
+            domains: Vec::new(),
         }
     }
 
@@ -139,9 +183,6 @@ mod tests {
             "/torrents.php?action=download&id={id}&authkey={authkey}&torrent_pass={passkey}",
         );
 
-        assert!(matches!(
-            config.create_template().build_download_url("1"),
-            Err(TemplateError::MissingAuthkey)
-        ));
+        assert!(matches!(fill_pattern(&config, "1"), Err(TemplateError::MissingAuthkey)));
     }
 }

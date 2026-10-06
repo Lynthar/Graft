@@ -3,16 +3,17 @@
 [![license](https://img.shields.io/github/license/Lynthar/Graft)](LICENSE)
 [![status](https://img.shields.io/badge/status-work%20in%20progress-orange)](#status)
 
-Work-in-progress Rust rewrite of a PT cross-seeding tool. Not usable yet: it builds, but finds nothing it can cross-seed.
+Work-in-progress Rust rewrite of a PT cross-seeding tool. It finds cross-seeds on NexusPHP trackers by piece hash, but hasn't yet been run end to end against real trackers.
 
-> **Read this before you clone.** The backend and frontend are written and the
-> build works, but the cross-seeding flow can't produce a result yet, there are
-> no releases or published images, and credentials are stored in plain text.
-> Watch it if you like; don't deploy it.
+> **Read this before you clone.** The cross-seeding flow is written and tested
+> against mock servers, not yet against real trackers. There are no releases or
+> published images, the database layout may still change without an upgrade
+> path, and credentials are stored in plain text. Watch it if you like; don't
+> deploy it.
 
-Cross-seeding for private trackers: take a torrent you already have in one
-client, fingerprint its content, find the same content on other trackers, and add
-it back to the client.
+Cross-seeding for private trackers: take the torrents you already seed, find
+the same content on other trackers you belong to, and add those torrents to your
+client so the data you already have seeds there too.
 
 It descends from IYUUPlus. I wrote the Rust source from scratch and embedded the
 web UI in a single binary, but this repository carries the full upstream git
@@ -21,31 +22,39 @@ history, so most of its commits are not mine. Upstream continues at
 
 ## Status
 
-**What's written**: fifteen HTTP endpoints with real implementations, working
-qBittorrent WebUI and Transmission RPC clients that genuinely add torrents, the
-preview-and-execute cross-seed flow, and six frontend pages wired to the API.
-CI type-checks and builds the frontend, builds and tests the backend, and
-builds the Docker image.
+**What works, against mocks**: reading a qBittorrent client, asking NexusPHP
+trackers which of its contents they carry, previewing the candidates, and adding
+the ones you confirm to qBittorrent. The test suite runs the real binary against
+a mock qBittorrent and mock trackers. Adding to Transmission is written but not
+covered by those tests.
 
-**What doesn't work**: matching never yields a torrent it can add. Candidates
-come from an index of torrents already in your own clients, and a tracker's
-announce URL carries your passkey, not a torrent id — so every match points at
-something you already seed, with no id to download it by. The planned fix is to
-ask each tracker directly by piece hash (NexusPHP's `/api/pieces-hash`), which
-isn't written yet.
+**What hasn't been checked**: a full run against real trackers. Their pieces-hash
+endpoint was probed with a real account on three NexusPHP sites (two answer, one
+doesn't have it), but downloading and adding through Graft hasn't been tried on
+a live client yet.
 
-**What isn't written**: the scheduler and any automatic re-seeding, RSS or
-subscriptions, notifications, tracker search, API tokens, and internationalisation.
+**What isn't written**: lookups on Unit3D and Gazelle trackers, importing a
+`.torrent` by hand, hard-link cross-seeding for files laid out differently, the
+scheduler and any automatic re-seeding, notifications, and internationalisation.
 
 ## How it works
 
-Torrents are imported from a client you already run — that's the only source of
-content, so it can only match things you already have. Each one is fingerprinted
-by file layout and size. When you ask it to cross-seed, it looks for the same
-fingerprint on the trackers you've configured, downloads the matching `.torrent`,
-and adds it back to the client pointing at the existing files.
+1. Graft reads the torrents in a qBittorrent client and recognises each one's
+   tracker from its tracker domain.
+2. For every complete torrent it computes the SHA-1 of the torrent's piece
+   hashes and asks each NexusPHP tracker you choose, through
+   `POST /api/pieces-hash`, whether it has a torrent with the same pieces.
+   Nothing else leaves your machine: the lookups go only to trackers you are a
+   member of, signed with your own passkey.
+3. The preview lists every match. You pick which ones to add.
+4. For each one it downloads the tracker's `.torrent`, checks that its pieces
+   and file layout match the files you already have, and adds it to the client
+   stopped, tagged `graft`, at the existing save path. Your client checks the
+   data before anything seeds; starting the torrents is up to you.
 
-Twelve trackers are built in, across three tracker platforms.
+Requests to each tracker are spaced out (10 a minute by default) and capped per
+day (20 downloads by default); both are set per tracker. Twelve trackers are
+built in, across three tracker platforms, and you can add your own.
 
 ## Building
 
@@ -87,24 +96,21 @@ with environment variables taking precedence.
 `GRAFT_HOST`, `GRAFT_PORT`, `GRAFT_DATA_DIR`, `GRAFT_DB_PATH` and `RUST_LOG`
 override them.
 
-The `[reseed]` and `[logging]` sections in the example file are not read by the
-current code.
+Unknown keys, or an environment variable that can't be parsed, stop Graft at
+start-up rather than being ignored.
 
 ## Limitations
 
-- **Importing fails if your client holds torrents from a tracker you haven't
-  added.** Recognition uses a compiled-in table of 22 trackers, and any torrent
-  from one that isn't configured stops the whole import with a foreign-key
-  error. Ten of those 22 aren't among the built-in trackers you can add.
-- **There's no discovery.** It can only match content already present in your
-  client — no tracker search, no RSS, no shared hash database.
-- **Gazelle trackers can't download**: their download URL needs an auth key that
-  can't be configured yet, so the attempt stops with "Missing authkey".
-- **Custom trackers added through the UI won't be recognised** — recognition uses
-  the compiled-in table, not the database.
-- **No scheduling.** Cross-seeding is manual, one click at a time.
-- **No database migration path** — there's no version table, so a schema change
-  means handling old databases by hand.
+- **Only NexusPHP trackers can be searched**, and only those running a release
+  from July 2023 or later; older or heavily modified ones answer 404. Unit3D and
+  Gazelle have no comparable endpoint.
+- **qBittorrent only, as the source.** Transmission doesn't report piece hashes;
+  it can still be the client torrents are added to.
+- **Same layout only.** A match whose file names or folders differ from yours is
+  listed but not added.
+- **No scheduling.** Cross-seeding is manual: preview, pick, add.
+- **No stable database yet.** Until the first release the schema can change; a
+  database from an older build is refused at start-up and has to be recreated.
 
 ## Security
 
