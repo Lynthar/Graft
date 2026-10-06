@@ -5,7 +5,7 @@ pub mod handlers;
 
 use axum::{
     Router,
-    routing::{get, post, delete},
+    routing::{get, post},
 };
 use rust_embed::RustEmbed;
 use std::sync::Arc;
@@ -15,7 +15,8 @@ use tower_http::{
 };
 
 use crate::db::Database;
-use crate::service::{IndexService, ReseedService};
+use crate::service::tasks::TaskRegistry;
+use crate::service::ReseedService;
 
 pub use error::AppError;
 
@@ -29,22 +30,16 @@ struct WebAssets;
 #[derive(Clone)]
 pub struct AppState {
     pub db: Database,
-    pub index_service: Arc<IndexService>,
-    pub reseed_service: Arc<ReseedService>,
+    pub reseed: Arc<ReseedService>,
+    pub tasks: Arc<TaskRegistry>,
 }
 
 impl AppState {
     pub fn new(db: Database) -> Self {
-        let index_service = Arc::new(IndexService::new(db.clone()));
-        let reseed_service = Arc::new(ReseedService::new(
-            db.clone(),
-            index_service.clone(),
-        ));
-
         Self {
+            reseed: Arc::new(ReseedService::new(db.clone())),
+            tasks: Arc::default(),
             db,
-            index_service,
-            reseed_service,
         }
     }
 }
@@ -62,19 +57,14 @@ pub fn create_router(state: AppState) -> Router {
 
         // Sites
         .route("/sites", get(handlers::site::list).post(handlers::site::create))
-        .route("/sites/available", get(handlers::site::available))
         .route("/sites/{id}", get(handlers::site::get_one).put(handlers::site::update).delete(handlers::site::remove))
-
-        // Index
-        .route("/index/stats", get(handlers::index::stats))
-        .route("/index/import/{client_id}", post(handlers::index::import))
-        .route("/index", delete(handlers::index::clear_all))
-        .route("/index/{site_id}", delete(handlers::index::clear_site))
 
         // Reseed
         .route("/reseed/preview", post(handlers::reseed::preview))
         .route("/reseed/execute", post(handlers::reseed::execute))
         .route("/reseed/history", get(handlers::reseed::history))
+        .route("/tasks/{id}", get(handlers::reseed::task_status))
+        .route("/tasks/{id}/cancel", post(handlers::reseed::task_cancel))
 
         // Stats
         .route("/stats", get(handlers::stats))

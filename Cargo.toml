@@ -23,8 +23,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # HTTP client (for calling downloader APIs)
 reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls", "multipart"] }
 
-# Torrent parsing
-lava_torrent = "0.7"
+# SHA-1 for info hashes and pieces hashes
 sha1_smol = "1"
 
 # Logging

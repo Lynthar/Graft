@@ -1,4 +1,4 @@
-import { Component, createResource, For } from 'solid-js';
+import { Component, createResource } from 'solid-js';
 import { fetchStats } from '../api/stats';
 
 const Dashboard: Component = () => {
@@ -16,9 +16,9 @@ const Dashboard: Component = () => {
               <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" />
             </svg>
           </div>
-          <div class="stat-title">Total Index</div>
-          <div class="stat-value text-primary">{stats()?.index?.total_entries || 0}</div>
-          <div class="stat-desc">Torrents indexed</div>
+          <div class="stat-title">Reseeded</div>
+          <div class="stat-value text-primary">{stats()?.total_success || 0}</div>
+          <div class="stat-desc">Torrents added so far</div>
         </div>
 
         <div class="stat bg-base-100 shadow rounded-box">
@@ -55,32 +55,6 @@ const Dashboard: Component = () => {
         </div>
       </div>
 
-      {/* Index by Site */}
-      <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-          <h2 class="card-title">Index by Site</h2>
-          <div class="overflow-x-auto">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Site</th>
-                  <th>Count</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={stats()?.index?.sites || []}>
-                  {(site) => (
-                    <tr>
-                      <td>{site.site_id}</td>
-                      <td>{site.count}</td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
     </div>
   );
 };

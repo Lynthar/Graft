@@ -11,7 +11,6 @@ pub use transmission::TransmissionClient;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 /// Unified error type for client operations
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +26,12 @@ pub enum ClientError {
 
     #[error("Torrent not found: {0}")]
     TorrentNotFound(String),
+
+    #[error("Not supported: {0}")]
+    Unsupported(&'static str),
+
+    #[error("The client already has this torrent")]
+    Duplicate,
 }
 
 pub type Result<T> = std::result::Result<T, ClientError>;
@@ -60,53 +65,36 @@ impl std::str::FromStr for ClientType {
     }
 }
 
-/// Torrent state
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum TorrentState {
-    Downloading,
-    Seeding,
-    Paused,
-    Checking,
-    Error,
-    Queued,
-    Stalled,
-    Unknown,
-}
-
-/// Information about a torrent
+/// A torrent as the downloader reports it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentInfo {
+    /// Lowercase hex v1 info hash.
     pub hash: String,
     pub name: String,
+    /// Total size of all files, selected or not.
     pub size: u64,
     pub progress: f64,
-    pub state: TorrentState,
     pub save_path: String,
-    pub category: Option<String>,
-    pub tags: Vec<String>,
+    /// The tracker currently in use; `None` when no tracker is working.
     pub tracker: Option<String>,
-    pub trackers: Vec<String>,
-    pub added_on: Option<DateTime<Utc>>,
-    pub files: Vec<TorrentFile>,
 }
 
-/// Information about a file in a torrent
+/// A file as it lies under the torrent's save path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentFile {
+    /// Relative path with `/` separators, including the root folder if there is one.
     pub name: String,
     pub size: u64,
-    pub progress: f64,
 }
 
-/// Options for adding a torrent
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// How a torrent is added. There is deliberately no way to start it or skip the hash
+/// check: a reseeded torrent must not touch existing data before the downloader has
+/// verified it piece by piece.
+#[derive(Debug, Clone)]
 pub struct AddTorrentOptions {
-    pub save_path: Option<String>,
-    pub category: Option<String>,
+    /// Used as-is: automatic management and content-layout rewrites are switched off.
+    pub save_path: String,
     pub tags: Vec<String>,
-    pub paused: bool,
-    pub skip_checking: bool,
 }
 
 /// Unified interface for BitTorrent clients
@@ -118,14 +106,25 @@ pub trait BitTorrentClient: Send + Sync {
     /// Get all torrents
     async fn get_torrents(&self) -> Result<Vec<TorrentInfo>>;
 
-    /// Get files for a specific torrent
+    /// Hex SHA-1 of every piece, in order.
+    ///
+    /// # Errors
+    /// `Unsupported` where the client cannot report piece hashes; an empty list means
+    /// the torrent has no metadata yet.
+    async fn get_piece_hashes(&self, hash: &str) -> Result<Vec<String>>;
+
+    /// Files of a torrent as laid out on disk.
     async fn get_torrent_files(&self, hash: &str) -> Result<Vec<TorrentFile>>;
 
-    /// Get trackers for a specific torrent
-    async fn get_torrent_trackers(&self, hash: &str) -> Result<Vec<String>>;
+    /// Whether the client currently holds a torrent with this info hash.
+    async fn has_torrent(&self, hash: &str) -> Result<bool>;
 
-    /// Add a torrent from bytes
-    async fn add_torrent(&self, torrent_bytes: &[u8], options: AddTorrentOptions) -> Result<String>;
+    /// Hand a torrent to the client, stopped and unchecked.
+    ///
+    /// # Errors
+    /// `Duplicate` when the client reports it already has the torrent. Success only
+    /// means the request was accepted; confirm with [`Self::has_torrent`].
+    async fn add_torrent(&self, torrent_bytes: &[u8], options: AddTorrentOptions) -> Result<()>;
 }
 
 /// Client configuration

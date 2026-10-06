@@ -238,12 +238,10 @@ mod tests {
             TorrentFile {
                 name: "movie.mkv".to_string(),
                 size: 10_000_000_000,
-                progress: 1.0,
             },
             TorrentFile {
                 name: "movie.nfo".to_string(),
                 size: 1000,
-                progress: 1.0,
             },
         ];
 

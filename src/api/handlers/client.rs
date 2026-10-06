@@ -4,6 +4,7 @@ use axum::{
     extract::{Path, State},
     Json,
 };
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{AppError, AppState};
@@ -182,7 +183,7 @@ pub async fn test(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let config = get_client_config(&state, &id)?;
+    let config = load_client(&state, &id)?;
     let client = config.create_client();
 
     match client.test_connection().await {
@@ -201,24 +202,33 @@ pub async fn test(
     }
 }
 
-/// Helper to get client config from database
-fn get_client_config(state: &AppState, id: &str) -> Result<ClientConfig, AppError> {
+/// Load a client's full configuration, credentials included, for talking to it.
+pub(crate) fn load_client(state: &AppState, id: &str) -> Result<ClientConfig, AppError> {
     let conn = state.db.conn();
-    conn.query_row(
-        "SELECT id, name, client_type, host, port, username, password, use_https FROM clients WHERE id = ?1",
-        [id],
-        |row| {
-            let client_type_str: String = row.get(2)?;
-            Ok(ClientConfig {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                client_type: client_type_str.parse().unwrap_or(ClientType::QBittorrent),
-                host: row.get(3)?,
-                port: row.get(4)?,
-                username: row.get(5)?,
-                password: row.get(6)?,
-                use_https: row.get::<_, i32>(7)? != 0,
-            })
-        },
-    ).map_err(|_| AppError::not_found("Client not found"))
+    let client = conn
+        .query_row(
+            "SELECT id, name, client_type, host, port, username, password, use_https FROM clients WHERE id = ?1",
+            [id],
+            |row| {
+                let client_type: String = row.get(2)?;
+                Ok(ClientConfig {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    client_type: client_type.parse().map_err(|e: String| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::other(e)),
+                        )
+                    })?,
+                    host: row.get(3)?,
+                    port: row.get(4)?,
+                    username: row.get(5)?,
+                    password: row.get(6)?,
+                    use_https: row.get::<_, i32>(7)? != 0,
+                })
+            },
+        )
+        .optional()?;
+    client.ok_or_else(|| AppError::not_found(format!("No download client with id {id}")))
 }
