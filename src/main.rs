@@ -1,8 +1,5 @@
-//! Graft - A lightweight, self-hosted PT cross-seeding tool
-//!
-//! Graft helps you automatically cross-seed torrents across multiple PT sites
-//! by matching content fingerprints (file size, structure) rather than relying
-//! on cloud-based hash matching services.
+//! Graft: self-hosted cross-seeding for private trackers. It asks the trackers you belong to,
+//! by piece hash, which of your client's contents they carry, and adds the matches you pick.
 
 use anyhow::{Context, Result};
 use tracing::info;
@@ -18,6 +15,11 @@ mod torrent;
 use api::AppState;
 use config::Settings;
 use db::Database;
+
+/// `err` and every cause beneath it, joined by ": ".
+pub(crate) fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    std::iter::successors(Some(err), |e| e.source()).map(ToString::to_string).collect::<Vec<_>>().join(": ")
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {

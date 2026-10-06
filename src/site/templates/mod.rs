@@ -62,7 +62,7 @@ pub enum TemplateError {
     DownloadFailed(String),
 
     #[error("HTTP error: {0}")]
-    HttpError(reqwest::Error),
+    HttpError(String),
 
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
@@ -71,7 +71,7 @@ pub enum TemplateError {
 impl From<reqwest::Error> for TemplateError {
     // Download URLs carry the passkey; reqwest puts the URL into its message.
     fn from(err: reqwest::Error) -> Self {
-        Self::HttpError(err.without_url())
+        Self::HttpError(crate::error_chain(&err.without_url()))
     }
 }
 
@@ -158,7 +158,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_download_does_not_expose_passkey() {
+    async fn failed_download_names_the_cause_but_not_the_passkey() {
         // Nothing listens on loopback port 1, so the request fails inside reqwest.
         let config = site(
             TemplateType::NexusPHP,
@@ -173,6 +173,7 @@ mod tests {
 
         assert!(matches!(err, TemplateError::HttpError(_)));
         assert!(!err.to_string().contains("SECRET_PASSKEY"), "{err}");
+        assert!(err.to_string().contains("tcp connect error"), "the cause is named: {err}");
     }
 
     #[test]

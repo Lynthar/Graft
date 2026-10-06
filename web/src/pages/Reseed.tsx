@@ -132,8 +132,10 @@ const Reseed: Component = () => {
               {task()!.progress.phase}
               <Show when={task()!.progress.total > 0}> — {task()!.progress.done} / {task()!.progress.total}</Show>
             </div>
-            <progress class="progress progress-primary w-full"
-              value={task()!.progress.total ? task()!.progress.done : undefined} max={task()!.progress.total || 1} />
+            {/* Indeterminate means no value at all: assigning undefined to the property throws. */}
+            <Show when={task()!.progress.total > 0} fallback={<progress class="progress progress-primary w-full" />}>
+              <progress class="progress progress-primary w-full" value={task()!.progress.done} max={task()!.progress.total} />
+            </Show>
           </Show>
           <Show when={error()}>
             <div class="alert alert-error text-sm">{error()}</div>

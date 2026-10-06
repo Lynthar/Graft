@@ -254,6 +254,31 @@ async fn sites_without_the_endpoint_or_rejecting_the_passkey_are_reported_per_si
 }
 
 #[tokio::test]
+async fn a_lookup_cut_off_mid_response_is_sent_once_more() {
+    let content = movie();
+    let qb = Qb::default();
+    qb.seed(&content, "A", "tracker.a.test", "/data/a");
+    let qb_addr = qb.start().await;
+    let flaky = MockSite::new(Lookup::CutOffFirst(1));
+    flaky.publish(&content, "7", "B");
+    let flaky_addr = flaky.start().await;
+    let down = MockSite::new(Lookup::CutOffFirst(2));
+    down.publish(&content, "8", "C");
+    let down_addr = down.start().await;
+    let graft = Graft::start().await;
+    let client = graft.add_qb(qb_addr).await;
+    graft.add_site("flaky", "flaky.test", Some(flaky_addr), json!({})).await;
+    graft.add_site("down", "down.test", Some(down_addr), json!({})).await;
+
+    let (_, preview) = graft.preview(&client, &["flaky", "down"]).await;
+    let sites = preview["sites"].as_array().unwrap();
+    assert_eq!(sites[0]["error"], Value::Null, "{preview}");
+    assert_eq!(sites[0]["found"], 1, "{preview}");
+    assert!(sites[1]["error"].as_str().unwrap().contains("could not reach the site"), "{preview}");
+    assert_eq!((flaky.lookups(), down.lookups()), (2, 2), "one resend, no more");
+}
+
+#[tokio::test]
 async fn cancelling_keeps_what_was_added_and_a_rerun_only_does_the_rest() {
     let contents = [
         movie(),

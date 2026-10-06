@@ -19,7 +19,7 @@ pub enum ClientError {
     AuthenticationFailed,
 
     #[error("Request failed: {0}")]
-    RequestFailed(#[from] reqwest::Error),
+    RequestFailed(String),
 
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
@@ -32,6 +32,13 @@ pub enum ClientError {
 
     #[error("The client already has this torrent")]
     Duplicate,
+}
+
+impl From<reqwest::Error> for ClientError {
+    // The cause (timeout, refused, reset) sits below reqwest's own message.
+    fn from(err: reqwest::Error) -> Self {
+        Self::RequestFailed(crate::error_chain(&err))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, ClientError>;
