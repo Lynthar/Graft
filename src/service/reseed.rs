@@ -13,7 +13,8 @@ use crate::client::{AddTorrentOptions, BitTorrentClient, ClientConfig, ClientErr
 use crate::db::Database;
 use crate::service::tasks::Task;
 use crate::site::gate::RateGates;
-use crate::site::{self, lookup, Site, TemplateType};
+use crate::site::lookup::{self, LookupError};
+use crate::site::{self, Site, TemplateType};
 use crate::torrent::{self, sha1_hex};
 
 /// Tag every reseeded torrent carries in the downloader, so they can be filtered as a group.
@@ -349,20 +350,27 @@ impl ReseedService {
             .into_iter()
             .collect();
         let mut hits = HashMap::new();
-        for batch in hashes.chunks(lookup::MAX_BATCH) {
-            tokio::select! {
-                _ = self.gates.wait(&site.id, site.rate_limit_rpm) => {}
-                _ = task.cancelled() => break,
-            }
-            match lookup::query(&self.http, site, batch).await {
-                Ok(found) => {
-                    report.queried += batch.len();
-                    hits.extend(found.into_iter().filter(|(h, _)| batch.contains(h)));
+        'batches: for batch in hashes.chunks(lookup::MAX_BATCH) {
+            // A network failure gets one resend: lookups are read-only and the path to a site can stall.
+            for attempt in 1..=2 {
+                tokio::select! {
+                    _ = self.gates.wait(&site.id, site.rate_limit_rpm) => {}
+                    _ = task.cancelled() => break 'batches,
                 }
-                Err(e) => {
-                    warn!(site = %site.id, "pieces-hash lookup failed: {e}");
-                    report.error = Some(e.to_string());
-                    break;
+                match lookup::query(&self.http, site, batch).await {
+                    Ok(found) => {
+                        report.queried += batch.len();
+                        hits.extend(found.into_iter().filter(|(h, _)| batch.contains(h)));
+                        continue 'batches;
+                    }
+                    Err(e @ LookupError::Network(_)) if attempt == 1 => {
+                        warn!(site = %site.id, "pieces-hash lookup failed, sending it once more: {e}");
+                    }
+                    Err(e) => {
+                        warn!(site = %site.id, "pieces-hash lookup failed: {e}");
+                        report.error = Some(e.to_string());
+                        break 'batches;
+                    }
                 }
             }
         }

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -254,6 +254,8 @@ pub enum Lookup {
     Open,
     NoEndpoint,
     LoginRedirect,
+    /// The first n lookups break off mid-response, then the site answers normally.
+    CutOffFirst(usize),
 }
 
 pub struct SiteState {
@@ -295,6 +297,10 @@ impl MockSite {
         self.0.lock().unwrap().downloads.len()
     }
 
+    pub fn lookups(&self) -> usize {
+        self.0.lock().unwrap().lookups
+    }
+
     pub async fn start(&self) -> SocketAddr {
         let router = Router::new()
             .route("/api/pieces-hash", post(site_lookup))
@@ -310,7 +316,13 @@ async fn site_lookup(State(site): State<MockSite>, headers: HeaderMap, body: Str
     match s.lookup {
         Lookup::NoEndpoint => return (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/html")], "<html>404</html>").into_response(),
         Lookup::LoginRedirect => return (StatusCode::FOUND, [(header::LOCATION, "/login.php?returnto=x")]).into_response(),
-        Lookup::Open => {}
+        // Promising more bytes than are sent makes the server drop the connection mid-body;
+        // the body must be a stream, or hyper asserts the two lengths agree.
+        Lookup::CutOffFirst(n) if s.lookups <= n => {
+            let body = Body::from_stream(Body::from("{").into_data_stream());
+            return ([(header::CONTENT_LENGTH, "1000")], body).into_response();
+        }
+        Lookup::CutOffFirst(_) | Lookup::Open => {}
     }
     let pairs: Vec<(String, String)> = url::form_urlencoded::parse(body.as_bytes()).into_owned().collect();
     let passkey = pairs.iter().find(|(k, _)| k == "passkey").map(|(_, v)| v.as_str());
@@ -395,16 +407,29 @@ pub fn graft_command(dir: &PathBuf, port: u16) -> Command {
 impl Graft {
     pub async fn start() -> Graft {
         let dir = temp_dir();
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let child = graft_command(&dir, port).spawn().unwrap();
-        let graft = Graft { child, dir, base: format!("http://127.0.0.1:{port}/api"), http: reqwest::Client::new() };
-        for _ in 0..100 {
-            if graft.http.get(format!("{}/health", graft.base)).send().await.is_ok() {
-                return graft;
+        let http = reqwest::Client::new();
+        let mut stderr = String::new();
+        // The port is free when picked, but another socket can take it before graft binds it.
+        for _ in 0..5 {
+            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let mut child = graft_command(&dir, port).spawn().unwrap();
+            let base = format!("http://127.0.0.1:{port}/api");
+            for _ in 0..100 {
+                let health = http.get(format!("{base}/health")).send().await;
+                if health.is_ok_and(|r| r.status().is_success()) {
+                    return Graft { child, dir, base, http };
+                }
+                if child.try_wait().unwrap().is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = child.kill();
+            let _ = child.wait();
+            stderr.clear();
+            std::io::Read::read_to_string(child.stderr.as_mut().unwrap(), &mut stderr).unwrap();
         }
-        panic!("graft did not start");
+        panic!("graft did not start:\n{stderr}");
     }
 
     pub async fn call(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> (StatusCode, Value) {

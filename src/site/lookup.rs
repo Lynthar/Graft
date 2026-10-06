@@ -60,12 +60,12 @@ pub async fn query(
         .form(&form)
         .send()
         .await
-        .map_err(|e| LookupError::Network(e.without_url().to_string()))?;
+        .map_err(|e| LookupError::Network(crate::error_chain(&e.without_url())))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|e| LookupError::Network(e.without_url().to_string()))?;
+        .map_err(|e| LookupError::Network(crate::error_chain(&e.without_url())))?;
     let scrub = |text: &str| -> String {
         let text: String = text.chars().take(200).collect();
         if passkey.is_empty() { text } else { text.replace(passkey, "<passkey>") }
