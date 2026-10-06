@@ -1,15 +1,16 @@
--- Graft Database Schema v1
--- Initial migration
+-- Graft schema version 1 (PRAGMA user_version = 1, set by the migration runner).
+-- Plain CREATE statements: a database that already has these tables must fail here,
+-- not be stamped as version 1 with a stale layout.
 
 -- Clients (download clients like qBittorrent, Transmission)
-CREATE TABLE IF NOT EXISTS clients (
+CREATE TABLE clients (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     client_type TEXT NOT NULL CHECK (client_type IN ('qbittorrent', 'transmission')),
     host TEXT NOT NULL,
     port INTEGER NOT NULL,
     username TEXT,
-    password_encrypted TEXT,
+    password TEXT,
     use_https INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -17,13 +18,14 @@ CREATE TABLE IF NOT EXISTS clients (
 );
 
 -- Sites (PT sites configuration)
-CREATE TABLE IF NOT EXISTS sites (
+CREATE TABLE sites (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
-    template_type TEXT NOT NULL DEFAULT 'nexusphp',
+    template_type TEXT NOT NULL DEFAULT 'nexusphp'
+        CHECK (template_type IN ('nexusphp', 'unit3d', 'gazelle')),
     passkey TEXT,
-    cookie_encrypted TEXT,
+    cookie TEXT,
     enabled INTEGER NOT NULL DEFAULT 1,
     rate_limit_rpm INTEGER DEFAULT 10,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -31,7 +33,7 @@ CREATE TABLE IF NOT EXISTS sites (
 );
 
 -- Content fingerprints (for matching identical content across sites)
-CREATE TABLE IF NOT EXISTS content_fingerprints (
+CREATE TABLE content_fingerprints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     total_size INTEGER NOT NULL,
     file_count INTEGER NOT NULL,
@@ -40,11 +42,11 @@ CREATE TABLE IF NOT EXISTS content_fingerprints (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_fingerprint_size ON content_fingerprints(total_size);
-CREATE INDEX IF NOT EXISTS idx_fingerprint_composite ON content_fingerprints(total_size, file_count, largest_file_size);
+CREATE INDEX idx_fingerprint_size ON content_fingerprints(total_size);
+CREATE INDEX idx_fingerprint_composite ON content_fingerprints(total_size, file_count, largest_file_size);
 
 -- Torrent index (maps torrents to sites and content fingerprints)
-CREATE TABLE IF NOT EXISTS torrent_index (
+CREATE TABLE torrent_index (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     info_hash TEXT NOT NULL,
     site_id TEXT NOT NULL,
@@ -60,12 +62,12 @@ CREATE TABLE IF NOT EXISTS torrent_index (
     FOREIGN KEY (fingerprint_id) REFERENCES content_fingerprints(id) ON DELETE SET NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_torrent_hash ON torrent_index(info_hash);
-CREATE INDEX IF NOT EXISTS idx_torrent_site ON torrent_index(site_id);
-CREATE INDEX IF NOT EXISTS idx_torrent_fingerprint ON torrent_index(fingerprint_id);
+CREATE INDEX idx_torrent_hash ON torrent_index(info_hash);
+CREATE INDEX idx_torrent_site ON torrent_index(site_id);
+CREATE INDEX idx_torrent_fingerprint ON torrent_index(fingerprint_id);
 
 -- Reseed tasks (scheduled reseed jobs)
-CREATE TABLE IF NOT EXISTS reseed_tasks (
+CREATE TABLE reseed_tasks (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     source_client TEXT NOT NULL,
@@ -81,7 +83,7 @@ CREATE TABLE IF NOT EXISTS reseed_tasks (
 );
 
 -- Reseed history (log of reseed operations)
-CREATE TABLE IF NOT EXISTS reseed_history (
+CREATE TABLE reseed_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT,
     info_hash TEXT NOT NULL,
@@ -93,22 +95,22 @@ CREATE TABLE IF NOT EXISTS reseed_history (
     FOREIGN KEY (task_id) REFERENCES reseed_tasks(id) ON DELETE SET NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_history_hash ON reseed_history(info_hash);
-CREATE INDEX IF NOT EXISTS idx_history_date ON reseed_history(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_history_status ON reseed_history(status);
+CREATE INDEX idx_history_hash ON reseed_history(info_hash);
+CREATE INDEX idx_history_date ON reseed_history(created_at DESC);
+CREATE INDEX idx_history_status ON reseed_history(status);
 
 -- System settings (key-value store)
-CREATE TABLE IF NOT EXISTS settings (
+CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Tracker domain mappings (for site identification)
-CREATE TABLE IF NOT EXISTS tracker_domains (
+CREATE TABLE tracker_domains (
     domain TEXT PRIMARY KEY,
     site_id TEXT NOT NULL,
     FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_tracker_site ON tracker_domains(site_id);
+CREATE INDEX idx_tracker_site ON tracker_domains(site_id);
