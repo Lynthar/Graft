@@ -3,12 +3,12 @@
 [![license](https://img.shields.io/github/license/Lynthar/Graft)](LICENSE)
 [![status](https://img.shields.io/badge/status-work%20in%20progress-orange)](#status)
 
-Work-in-progress Rust rewrite of a PT cross-seeding tool. Not usable yet: the build chain is broken.
+Work-in-progress Rust rewrite of a PT cross-seeding tool. Not usable yet: it builds, but finds nothing it can cross-seed.
 
-> **Read this before you clone.** The backend and frontend are written, but the
-> build doesn't complete, there are no releases, no published images, and the
-> credential handling is not fit for anything but a throwaway environment. Watch
-> it if you like; don't deploy it.
+> **Read this before you clone.** The backend and frontend are written and the
+> build works, but the cross-seeding flow can't produce a result yet, there are
+> no releases or published images, and credentials are stored in plain text.
+> Watch it if you like; don't deploy it.
 
 Cross-seeding for private trackers: take a torrent you already have in one
 client, fingerprint its content, find the same content on other trackers, and add
@@ -21,14 +21,18 @@ history, so most of its commits are not mine. Upstream continues at
 
 ## Status
 
-**What's written**: sixteen HTTP endpoints with real implementations, working
+**What's written**: fifteen HTTP endpoints with real implementations, working
 qBittorrent WebUI and Transmission RPC clients that genuinely add torrents, the
 preview-and-execute cross-seed flow, and six frontend pages wired to the API.
+CI type-checks and builds the frontend, builds and tests the backend, and
+builds the Docker image.
 
-**What's broken**: `cargo build` fails. The backend embeds the frontend from
-`web/dist`, which isn't in the repository and isn't built first, so compilation
-stops there. The four CI workflows point at Dockerfiles that don't exist and have
-never run.
+**What doesn't work**: matching never yields a torrent it can add. Candidates
+come from an index of torrents already in your own clients, and a tracker's
+announce URL carries your passkey, not a torrent id — so every match points at
+something you already seed, with no id to download it by. The planned fix is to
+ask each tracker directly by piece hash (NexusPHP's `/api/pieces-hash`), which
+isn't written yet.
 
 **What isn't written**: the scheduler and any automatic re-seeding, RSS or
 subscriptions, notifications, tracker search, API tokens, and internationalisation.
@@ -41,12 +45,11 @@ by file layout and size. When you ask it to cross-seed, it looks for the same
 fingerprint on the trackers you've configured, downloads the matching `.torrent`,
 and adds it back to the client pointing at the existing files.
 
-Thirteen tracker templates ship with it, across three tracker platforms.
+Twelve trackers are built in, across three tracker platforms.
 
 ## Building
 
-Only one path currently works, because the Dockerfile builds the frontend before
-the Rust code:
+With Docker:
 
 ```bash
 git clone https://github.com/Lynthar/Graft.git
@@ -54,18 +57,20 @@ cd Graft
 docker compose up -d
 ```
 
-Building by hand needs the same ordering:
+By hand, with Node.js 24 and a current stable Rust:
 
 ```bash
-cd web && npm install && npm run build && cd ..
+cd web && npm ci && npm run build && cd ..
 cargo build --release
 ```
 
-The instructions you'd expect — downloading a release binary, or pulling a
-published image — don't work. Neither exists.
+Build the frontend first. Without `web/dist` the binary still compiles, but
+serves a page asking you to build the frontend.
 
-It listens on `0.0.0.0:3000` and creates `./data/graft.db` in the working
-directory.
+There are no release binaries or published images.
+
+It listens on `127.0.0.1:3000` and creates `./data/graft.db` in the working
+directory. The compose file publishes the port on `127.0.0.1` only.
 
 ## Configuration
 
@@ -75,7 +80,7 @@ with environment variables taking precedence.
 
 | Key | Default |
 |---|---|
-| `server.host` | `0.0.0.0` |
+| `server.host` | `127.0.0.1` |
 | `server.port` | `3000` |
 | `database.path` | `./data/graft.db` |
 
@@ -87,16 +92,16 @@ current code.
 
 ## Limitations
 
-- **Cross-seeding depends on extracting a torrent id from the tracker's announce
-  URL.** Many trackers don't put one there, and when it can't be found the
-  operation fails with exactly that message. How often it succeeds in practice
-  hasn't been measured.
+- **Importing fails if your client holds torrents from a tracker you haven't
+  added.** Recognition uses a compiled-in table of 22 trackers, and any torrent
+  from one that isn't configured stops the whole import with a foreign-key
+  error. Ten of those 22 aren't among the built-in trackers you can add.
 - **There's no discovery.** It can only match content already present in your
   client — no tracker search, no RSS, no shared hash database.
-- **Gazelle trackers can't actually download**: the auth key field is never
-  populated, so the download URL comes out incomplete.
+- **Gazelle trackers can't download**: their download URL needs an auth key that
+  can't be configured yet, so the attempt stops with "Missing authkey".
 - **Custom trackers added through the UI won't be recognised** — recognition uses
-  a compiled-in table, not the database.
+  the compiled-in table, not the database.
 - **No scheduling.** Cross-seeding is manual, one click at a time.
 - **No database migration path** — there's no version table, so a schema change
   means handling old databases by hand.
@@ -105,13 +110,16 @@ current code.
 
 **Do not expose this to any network you don't control.** As it stands:
 
-- Downloader passwords and tracker passkeys are **stored in plain text**.
+- Downloader passwords and tracker passkeys are **stored in plain text**, in a
+  database file created with default permissions.
 - The web UI has **no authentication of any kind**.
-- CORS is fully permissive, and it binds `0.0.0.0` by default.
+- It binds `127.0.0.1` by default and sends no CORS headers, so ordinary web
+  pages can't read its responses. It doesn't yet check the `Host` or `Origin`
+  header, so a DNS-rebinding page could still drive it.
 
-Together that means anyone who can reach port 3000 can read every credential you
-have entered. Until that's fixed, run it only on a host you trust completely,
-bound to loopback.
+Anything that can reach the port can read and change every setting, and can make
+it send your passkeys to an address of its choosing. Keep it on loopback, on a
+host you trust.
 
 ## License
 

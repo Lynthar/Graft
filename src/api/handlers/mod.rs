@@ -91,7 +91,9 @@ pub async fn static_handler(uri: Uri) -> impl IntoResponse {
             .unwrap(),
         None => Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Not Found"))
+            .body(Body::from(
+                "Frontend not built: run `npm ci && npm run build` in web/, then rebuild.",
+            ))
             .unwrap(),
     }
 }

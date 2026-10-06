@@ -4,49 +4,32 @@
 
 use async_trait::async_trait;
 
-use super::{Result, SiteTemplate, TemplateError, TemplateType};
+use super::{Result, SiteTemplate, TemplateError};
 use crate::site::SiteConfig;
 
 pub struct GazelleTemplate {
     config: SiteConfig,
-    authkey: Option<String>,
 }
 
 impl GazelleTemplate {
     pub fn new(config: SiteConfig) -> Self {
-        Self {
-            config,
-            authkey: None,
-        }
-    }
-
-    pub fn with_authkey(mut self, authkey: String) -> Self {
-        self.authkey = Some(authkey);
-        self
+        Self { config }
     }
 }
 
 #[async_trait]
 impl SiteTemplate for GazelleTemplate {
-    fn config(&self) -> &SiteConfig {
-        &self.config
-    }
-
-    fn template_type(&self) -> TemplateType {
-        TemplateType::Gazelle
-    }
-
     fn build_download_url(&self, torrent_id: &str) -> Result<String> {
+        // No site field stores the user's authkey yet, so such a URL can't be built.
+        if self.config.download_pattern.contains("{authkey}") {
+            return Err(TemplateError::MissingAuthkey);
+        }
+
         let passkey = self.config.passkey.as_ref()
             .ok_or(TemplateError::MissingPasskey)?;
 
-        // Gazelle uses authkey + torrent_pass (passkey)
-        // Format: /torrents.php?action=download&id={id}&authkey={authkey}&torrent_pass={passkey}
-        let authkey = self.authkey.as_deref().unwrap_or("");
-
         let url = self.config.download_pattern
             .replace("{id}", torrent_id)
-            .replace("{authkey}", authkey)
             .replace("{passkey}", passkey);
 
         Ok(format!("{}{}", self.config.base_url, url))

@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 
-use super::{Result, SiteTemplate, TemplateError, TemplateType};
+use super::{Result, SiteTemplate, TemplateError};
 use crate::site::SiteConfig;
 
 pub struct NexusPHPTemplate {
@@ -19,14 +19,6 @@ impl NexusPHPTemplate {
 
 #[async_trait]
 impl SiteTemplate for NexusPHPTemplate {
-    fn config(&self) -> &SiteConfig {
-        &self.config
-    }
-
-    fn template_type(&self) -> TemplateType {
-        TemplateType::NexusPHP
-    }
-
     fn build_download_url(&self, torrent_id: &str) -> Result<String> {
         let passkey = self.config.passkey.as_ref()
             .ok_or(TemplateError::MissingPasskey)?;

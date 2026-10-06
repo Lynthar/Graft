@@ -201,18 +201,6 @@ pub async fn test(
     }
 }
 
-/// Get torrents from a client
-pub async fn torrents(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<Vec<crate::client::TorrentInfo>>, AppError> {
-    let config = get_client_config(&state, &id)?;
-    let client = config.create_client();
-
-    let torrents = client.get_torrents().await?;
-    Ok(Json(torrents))
-}
-
 /// Helper to get client config from database
 fn get_client_config(state: &AppState, id: &str) -> Result<ClientConfig, AppError> {
     let conn = state.db.conn();

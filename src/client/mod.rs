@@ -16,9 +16,6 @@ use chrono::{DateTime, Utc};
 /// Unified error type for client operations
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
-    #[error("Connection failed: {0}")]
-    ConnectionFailed(String),
-
     #[error("Authentication failed")]
     AuthenticationFailed,
 
@@ -30,9 +27,6 @@ pub enum ClientError {
 
     #[error("Torrent not found: {0}")]
     TorrentNotFound(String),
-
-    #[error("Operation not supported")]
-    NotSupported,
 }
 
 pub type Result<T> = std::result::Result<T, ClientError>;
@@ -118,20 +112,11 @@ pub struct AddTorrentOptions {
 /// Unified interface for BitTorrent clients
 #[async_trait]
 pub trait BitTorrentClient: Send + Sync {
-    /// Get the client type
-    fn client_type(&self) -> ClientType;
-
-    /// Get the client ID
-    fn client_id(&self) -> &str;
-
     /// Test the connection to the client
     async fn test_connection(&self) -> Result<bool>;
 
     /// Get all torrents
     async fn get_torrents(&self) -> Result<Vec<TorrentInfo>>;
-
-    /// Get a specific torrent by hash
-    async fn get_torrent(&self, hash: &str) -> Result<Option<TorrentInfo>>;
 
     /// Get files for a specific torrent
     async fn get_torrent_files(&self, hash: &str) -> Result<Vec<TorrentFile>>;
@@ -141,18 +126,6 @@ pub trait BitTorrentClient: Send + Sync {
 
     /// Add a torrent from bytes
     async fn add_torrent(&self, torrent_bytes: &[u8], options: AddTorrentOptions) -> Result<String>;
-
-    /// Remove a torrent
-    async fn remove_torrent(&self, hash: &str, delete_files: bool) -> Result<()>;
-
-    /// Pause a torrent
-    async fn pause_torrent(&self, hash: &str) -> Result<()>;
-
-    /// Resume a torrent
-    async fn resume_torrent(&self, hash: &str) -> Result<()>;
-
-    /// Force recheck a torrent
-    async fn recheck_torrent(&self, hash: &str) -> Result<()>;
 }
 
 /// Client configuration

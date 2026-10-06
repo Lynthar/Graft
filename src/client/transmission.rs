@@ -4,13 +4,13 @@
 //! Reference: https://github.com/transmission/transmission/blob/main/docs/rpc-spec.md
 
 use super::{
-    AddTorrentOptions, BitTorrentClient, ClientConfig, ClientError, ClientType, Result,
+    AddTorrentOptions, BitTorrentClient, ClientConfig, ClientError, Result,
     TorrentFile, TorrentInfo, TorrentState,
 };
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::{Client, StatusCode};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -101,14 +101,6 @@ impl TransmissionClient {
 
 #[async_trait]
 impl BitTorrentClient for TransmissionClient {
-    fn client_type(&self) -> ClientType {
-        ClientType::Transmission
-    }
-
-    fn client_id(&self) -> &str {
-        &self.config.id
-    }
-
     async fn test_connection(&self) -> Result<bool> {
         let _: SessionStats = self.rpc_call("session-stats", json!({})).await?;
         Ok(true)
@@ -125,20 +117,6 @@ impl BitTorrentClient for TransmissionClient {
         let response: TorrentsResponse = self.rpc_call("torrent-get", args).await?;
 
         Ok(response.torrents.into_iter().map(|t| t.into()).collect())
-    }
-
-    async fn get_torrent(&self, hash: &str) -> Result<Option<TorrentInfo>> {
-        let args = json!({
-            "ids": [hash],
-            "fields": [
-                "id", "hashString", "name", "totalSize", "percentDone",
-                "status", "downloadDir", "labels", "trackers", "addedDate", "files"
-            ]
-        });
-
-        let response: TorrentsResponse = self.rpc_call("torrent-get", args).await?;
-
-        Ok(response.torrents.into_iter().next().map(|t| t.into()))
     }
 
     async fn get_torrent_files(&self, hash: &str) -> Result<Vec<TorrentFile>> {
@@ -212,34 +190,6 @@ impl BitTorrentClient for TransmissionClient {
             .or(response.torrent_duplicate)
             .map(|t| t.hash_string)
             .unwrap_or_default())
-    }
-
-    async fn remove_torrent(&self, hash: &str, delete_files: bool) -> Result<()> {
-        let args = json!({
-            "ids": [hash],
-            "delete-local-data": delete_files,
-        });
-
-        let _: serde_json::Value = self.rpc_call("torrent-remove", args).await?;
-        Ok(())
-    }
-
-    async fn pause_torrent(&self, hash: &str) -> Result<()> {
-        let args = json!({ "ids": [hash] });
-        let _: serde_json::Value = self.rpc_call("torrent-stop", args).await?;
-        Ok(())
-    }
-
-    async fn resume_torrent(&self, hash: &str) -> Result<()> {
-        let args = json!({ "ids": [hash] });
-        let _: serde_json::Value = self.rpc_call("torrent-start", args).await?;
-        Ok(())
-    }
-
-    async fn recheck_torrent(&self, hash: &str) -> Result<()> {
-        let args = json!({ "ids": [hash] });
-        let _: serde_json::Value = self.rpc_call("torrent-verify", args).await?;
-        Ok(())
     }
 }
 

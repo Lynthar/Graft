@@ -2,8 +2,8 @@
 # Copy this file to config.toml and customize as needed
 
 [server]
-# Host to bind to (0.0.0.0 for all interfaces)
-host = "0.0.0.0"
+# Host to bind to. There is no authentication, so keep it on loopback.
+host = "127.0.0.1"
 # Port to listen on
 port = 3000
 

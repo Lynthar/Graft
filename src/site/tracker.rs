@@ -156,22 +156,12 @@ impl TrackerIdentifier {
         let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
         for segment in segments.iter().rev() {
-            if segment.chars().all(|c| c.is_ascii_digit()) && segment.len() > 0 {
+            if !segment.is_empty() && segment.chars().all(|c| c.is_ascii_digit()) {
                 return Some(segment.to_string());
             }
         }
 
         None
-    }
-
-    /// Register a custom site domain mapping
-    pub fn register_site(&mut self, domain: &str, site_id: &str) {
-        self.domain_map.insert(domain.to_string(), site_id.to_string());
-    }
-
-    /// Get all registered domains
-    pub fn get_domains(&self) -> Vec<(&String, &String)> {
-        self.domain_map.iter().collect()
     }
 }
 

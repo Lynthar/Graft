@@ -36,9 +36,6 @@ web/dist/
 *.log
 logs/
 
-# Legacy PHP code (keeping for reference)
-/_legacy/
-
 # Build artifacts
 *.exe
 *.dll

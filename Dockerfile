@@ -2,7 +2,7 @@
 # Multi-stage build for minimal image size
 
 # Stage 1: Build frontend
-FROM node:20-alpine AS web-builder
+FROM node:24-alpine3.24 AS web-builder
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci
@@ -10,8 +10,8 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build backend
-FROM rust:1.83-alpine AS rust-builder
-RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static pkgconfig
+FROM rust:1.99-alpine3.24 AS rust-builder
+RUN apk add --no-cache musl-dev
 
 WORKDIR /app
 
@@ -23,6 +23,7 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release && rm -rf src
 
 # Copy actual source
+COPY build.rs ./
 COPY src/ ./src/
 COPY migrations/ ./migrations/
 
@@ -33,7 +34,7 @@ COPY --from=web-builder /app/web/dist ./web/dist
 RUN touch src/main.rs && cargo build --release
 
 # Stage 3: Final image
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata
 
