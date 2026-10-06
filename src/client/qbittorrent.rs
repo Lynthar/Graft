@@ -4,7 +4,7 @@
 //! Reference: https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-(qBittorrent-4.1)
 
 use super::{
-    AddTorrentOptions, BitTorrentClient, ClientConfig, ClientError, ClientType, Result,
+    AddTorrentOptions, BitTorrentClient, ClientConfig, ClientError, Result,
     TorrentFile, TorrentInfo, TorrentState,
 };
 use async_trait::async_trait;
@@ -58,7 +58,7 @@ impl QBittorrentClient {
         }
 
         // Extract SID cookie
-        if let Some(cookie) = self.http.get(&self.api_url("/app/version")).send().await?.headers().get("set-cookie") {
+        if let Some(cookie) = self.http.get(self.api_url("/app/version")).send().await?.headers().get("set-cookie") {
             if let Ok(cookie_str) = cookie.to_str() {
                 let mut cookie_guard = self.cookie.write().await;
                 *cookie_guard = Some(cookie_str.to_string());
@@ -70,7 +70,7 @@ impl QBittorrentClient {
 
     async fn ensure_logged_in(&self) -> Result<()> {
         // Try a simple request to check if we're logged in
-        let response = self.http.get(&self.api_url("/app/version")).send().await?;
+        let response = self.http.get(self.api_url("/app/version")).send().await?;
 
         if response.status() == StatusCode::FORBIDDEN {
             self.login().await?;
@@ -82,18 +82,10 @@ impl QBittorrentClient {
 
 #[async_trait]
 impl BitTorrentClient for QBittorrentClient {
-    fn client_type(&self) -> ClientType {
-        ClientType::QBittorrent
-    }
-
-    fn client_id(&self) -> &str {
-        &self.config.id
-    }
-
     async fn test_connection(&self) -> Result<bool> {
         self.login().await?;
 
-        let response = self.http.get(&self.api_url("/app/version")).send().await?;
+        let response = self.http.get(self.api_url("/app/version")).send().await?;
 
         Ok(response.status().is_success())
     }
@@ -119,21 +111,6 @@ impl BitTorrentClient for QBittorrentClient {
         }
 
         Ok(result)
-    }
-
-    async fn get_torrent(&self, hash: &str) -> Result<Option<TorrentInfo>> {
-        self.ensure_logged_in().await?;
-
-        let url = format!("{}?hashes={}", self.api_url("/torrents/info"), hash);
-        let response = self.http.get(&url).send().await?;
-
-        if !response.status().is_success() {
-            return Ok(None);
-        }
-
-        let torrents: Vec<QBTorrent> = response.json().await?;
-
-        Ok(torrents.into_iter().next().map(|t| t.into()))
     }
 
     async fn get_torrent_files(&self, hash: &str) -> Result<Vec<TorrentFile>> {
@@ -228,81 +205,6 @@ impl BitTorrentClient for QBittorrentClient {
         // qBittorrent doesn't return the hash directly, we need to parse the torrent
         // For now, return empty string - caller should use torrent parsing to get hash
         Ok(String::new())
-    }
-
-    async fn remove_torrent(&self, hash: &str, delete_files: bool) -> Result<()> {
-        self.ensure_logged_in().await?;
-
-        let url = self.api_url("/torrents/delete");
-        let params = [
-            ("hashes", hash),
-            ("deleteFiles", if delete_files { "true" } else { "false" }),
-        ];
-
-        let response = self.http.post(&url).form(&params).send().await?;
-
-        if !response.status().is_success() {
-            return Err(ClientError::InvalidResponse(format!(
-                "Status: {}",
-                response.status()
-            )));
-        }
-
-        Ok(())
-    }
-
-    async fn pause_torrent(&self, hash: &str) -> Result<()> {
-        self.ensure_logged_in().await?;
-
-        let url = self.api_url("/torrents/pause");
-        let params = [("hashes", hash)];
-
-        let response = self.http.post(&url).form(&params).send().await?;
-
-        if !response.status().is_success() {
-            return Err(ClientError::InvalidResponse(format!(
-                "Status: {}",
-                response.status()
-            )));
-        }
-
-        Ok(())
-    }
-
-    async fn resume_torrent(&self, hash: &str) -> Result<()> {
-        self.ensure_logged_in().await?;
-
-        let url = self.api_url("/torrents/resume");
-        let params = [("hashes", hash)];
-
-        let response = self.http.post(&url).form(&params).send().await?;
-
-        if !response.status().is_success() {
-            return Err(ClientError::InvalidResponse(format!(
-                "Status: {}",
-                response.status()
-            )));
-        }
-
-        Ok(())
-    }
-
-    async fn recheck_torrent(&self, hash: &str) -> Result<()> {
-        self.ensure_logged_in().await?;
-
-        let url = self.api_url("/torrents/recheck");
-        let params = [("hashes", hash)];
-
-        let response = self.http.post(&url).form(&params).send().await?;
-
-        if !response.status().is_success() {
-            return Err(ClientError::InvalidResponse(format!(
-                "Status: {}",
-                response.status()
-            )));
-        }
-
-        Ok(())
     }
 }
 

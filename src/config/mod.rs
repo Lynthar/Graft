@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Application settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub server: ServerSettings,
@@ -51,7 +51,7 @@ pub struct ReseedSettings {
 }
 
 fn default_host() -> String {
-    "0.0.0.0".to_string()
+    "127.0.0.1".to_string()
 }
 
 fn default_port() -> u16 {
@@ -93,17 +93,6 @@ impl Default for ReseedSettings {
             default_paused: false,
             request_interval_ms: default_request_interval(),
             max_per_run: default_max_per_run(),
-        }
-    }
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            server: ServerSettings::default(),
-            database: DatabaseSettings::default(),
-            reseed: ReseedSettings::default(),
-            config_file: None,
         }
     }
 }
@@ -213,7 +202,12 @@ fn dirs_config_path() -> Option<PathBuf> {
     }
 }
 
-// Add toml dependency
-fn _toml_parse_helper() {
-    // This is a marker to remind us to add toml to Cargo.toml
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listens_on_loopback_by_default() {
+        assert_eq!(Settings::default().server.host, "127.0.0.1");
+    }
 }

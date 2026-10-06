@@ -1,5 +1,5 @@
 import { Component, createSignal, createResource, For, Show } from 'solid-js';
-import { fetchClients, createClient, testClient, deleteClient, type Client } from '../api/clients';
+import { fetchClients, createClient, testClient, deleteClient } from '../api/clients';
 
 const Clients: Component = () => {
   const [clients, { refetch }] = createResource(fetchClients);

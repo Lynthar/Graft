@@ -5,38 +5,36 @@ pub mod handlers;
 
 use axum::{
     Router,
-    routing::{get, post, put, delete},
+    routing::{get, post, delete},
 };
 use rust_embed::RustEmbed;
 use std::sync::Arc;
 use tower_http::{
-    cors::CorsLayer,
     compression::CompressionLayer,
     trace::TraceLayer,
 };
 
-use crate::config::Settings;
 use crate::db::Database;
 use crate::service::{IndexService, ReseedService};
 
 pub use error::AppError;
 
-/// Embedded frontend assets
+/// Embedded frontend assets; empty when `web/dist` hasn't been built.
 #[derive(RustEmbed)]
 #[folder = "web/dist"]
+#[allow_missing = true]
 struct WebAssets;
 
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
     pub db: Database,
-    pub settings: Settings,
     pub index_service: Arc<IndexService>,
     pub reseed_service: Arc<ReseedService>,
 }
 
 impl AppState {
-    pub fn new(db: Database, settings: Settings) -> Self {
+    pub fn new(db: Database) -> Self {
         let index_service = Arc::new(IndexService::new(db.clone()));
         let reseed_service = Arc::new(ReseedService::new(
             db.clone(),
@@ -45,7 +43,6 @@ impl AppState {
 
         Self {
             db,
-            settings,
             index_service,
             reseed_service,
         }
@@ -62,7 +59,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/clients", get(handlers::client::list).post(handlers::client::create))
         .route("/clients/{id}", get(handlers::client::get_one).put(handlers::client::update).delete(handlers::client::remove))
         .route("/clients/{id}/test", post(handlers::client::test))
-        .route("/clients/{id}/torrents", get(handlers::client::torrents))
 
         // Sites
         .route("/sites", get(handlers::site::list).post(handlers::site::create))
@@ -81,14 +77,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/reseed/history", get(handlers::reseed::history))
 
         // Stats
-        .route("/stats", get(handlers::stats));
+        .route("/stats", get(handlers::stats))
+        .fallback(|| async { AppError::not_found("Unknown API endpoint") });
 
     Router::new()
         .nest("/api", api_routes)
         // Serve static files
         .fallback(handlers::static_handler)
         .with_state(state)
-        .layer(CorsLayer::permissive())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
 }

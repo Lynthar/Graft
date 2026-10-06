@@ -6,7 +6,7 @@
 mod tracker;
 pub mod templates;
 
-pub use tracker::{TrackerIdentifier, SiteIdentification};
+pub use tracker::TrackerIdentifier;
 pub use templates::{SiteTemplate, NexusPHPTemplate, TemplateType};
 
 use serde::{Deserialize, Serialize};

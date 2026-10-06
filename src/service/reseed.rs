@@ -10,11 +10,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 
-use crate::client::{AddTorrentOptions, BitTorrentClient, ClientConfig};
+use crate::client::{AddTorrentOptions, BitTorrentClient};
 use crate::db::Database;
-use crate::service::fingerprint::{ContentFingerprint, FingerprintMatcher, MatchResult};
+use crate::service::fingerprint::ContentFingerprint;
 use crate::service::index::IndexService;
-use crate::site::{SiteConfig, SiteTemplate};
+use crate::site::SiteConfig;
 
 /// Reseed service
 pub struct ReseedService {
@@ -37,11 +37,6 @@ impl ReseedService {
             http_client,
             request_interval: Duration::from_millis(500),
         }
-    }
-
-    pub fn with_request_interval(mut self, interval: Duration) -> Self {
-        self.request_interval = interval;
-        self
     }
 
     /// Preview reseed matches without executing
@@ -299,9 +294,6 @@ impl ReseedService {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReseedRequest {
     pub task_id: Option<String>,
-    pub source_client_id: String,
-    pub target_client_id: String,
-    pub target_site_ids: Vec<String>,
     #[serde(default)]
     pub add_paused: bool,
     #[serde(default)]

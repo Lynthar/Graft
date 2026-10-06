@@ -13,7 +13,6 @@ mod config;
 mod db;
 mod service;
 mod site;
-mod utils;
 
 use api::AppState;
 use config::Settings;
@@ -41,7 +40,7 @@ async fn main() -> Result<()> {
     info!("Database initialized at {:?}", settings.database.path);
 
     // Create application state
-    let state = AppState::new(db, settings.clone());
+    let state = AppState::new(db);
 
     // Build router
     let app = api::create_router(state);

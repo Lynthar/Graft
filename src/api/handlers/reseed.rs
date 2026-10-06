@@ -91,9 +91,6 @@ pub async fn execute(
     // Build request
     let reseed_req = ReseedRequest {
         task_id: None,
-        source_client_id: req.source_client_id,
-        target_client_id: req.target_client_id,
-        target_site_ids: req.target_site_ids,
         add_paused: req.add_paused,
         skip_checking: req.skip_checking,
     };

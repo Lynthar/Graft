@@ -9,10 +9,9 @@ authors = ["Arthur Evans"]
 
 [dependencies]
 # Web framework
-axum = { version = "0.8", features = ["ws", "macros"] }
+axum = "0.8"
 tokio = { version = "1", features = ["full"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "fs", "compression-gzip", "trace"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "trace"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -28,12 +27,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "coo
 lava_torrent = "0.7"
 sha1_smol = "1"
 
-# Async task scheduling
-tokio-cron-scheduler = "0.13"
-
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Configuration
 dotenvy = "0.15"
@@ -50,10 +46,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
 anyhow = "1"
 async-trait = "0.1"
-urlencoding = "2"
 base64 = "0.22"
 url = "2"
-regex = "1"
 mime_guess = "2"
 
 [profile.release]

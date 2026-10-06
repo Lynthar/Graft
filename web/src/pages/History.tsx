@@ -1,5 +1,5 @@
 import { Component, createResource, For } from 'solid-js';
-import { fetchHistory, type HistoryEntry } from '../api/reseed';
+import { fetchHistory } from '../api/reseed';
 
 const History: Component = () => {
   const [history] = createResource(() => fetchHistory({ limit: 100 }));

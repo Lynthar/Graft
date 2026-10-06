@@ -39,16 +39,6 @@ impl Database {
         })
     }
 
-    /// Create an in-memory database (for testing)
-    #[cfg(test)]
-    pub fn in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
-        })
-    }
-
     /// Run database migrations
     pub fn migrate(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -60,7 +50,7 @@ impl Database {
     }
 
     /// Get a connection for executing queries
-    pub fn conn(&self) -> std::sync::MutexGuard<Connection> {
+    pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap()
     }
 }

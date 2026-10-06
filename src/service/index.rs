@@ -96,13 +96,11 @@ impl IndexService {
 
             // Insert into database
             self.insert_entry(
-                &torrent.hash,
+                torrent,
                 &site_info.site_id,
                 site_info.torrent_id.as_deref(),
                 &fingerprint,
-                Some(&torrent.name),
-                Some(&torrent.save_path),
-                Some(client_id),
+                client_id,
             )?;
 
             result.imported += 1;
@@ -129,13 +127,11 @@ impl IndexService {
     /// Insert a new index entry
     fn insert_entry(
         &self,
-        info_hash: &str,
+        torrent: &TorrentInfo,
         site_id: &str,
         torrent_id: Option<&str>,
         fingerprint: &ContentFingerprint,
-        name: Option<&str>,
-        save_path: Option<&str>,
-        source_client: Option<&str>,
+        source_client: &str,
     ) -> Result<()> {
         let conn = self.db.conn();
 
@@ -147,13 +143,13 @@ impl IndexService {
             "INSERT INTO torrent_index (info_hash, site_id, torrent_id, fingerprint_id, name, size, save_path, source_client)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
-                info_hash,
+                torrent.hash,
                 site_id,
                 torrent_id,
                 fingerprint_id,
-                name,
+                torrent.name,
                 fingerprint.total_size as i64,
-                save_path,
+                torrent.save_path,
                 source_client,
             ],
         )?;
@@ -209,7 +205,7 @@ impl IndexService {
         let mut matcher = FingerprintMatcher::new();
 
         let mut stmt = conn.prepare(
-            "SELECT ti.info_hash, ti.site_id, ti.torrent_id, ti.name, ti.save_path,
+            "SELECT ti.info_hash, ti.site_id, ti.torrent_id,
                     cf.total_size, cf.file_count, cf.largest_file_size, cf.files_hash
              FROM torrent_index ti
              JOIN content_fingerprints cf ON ti.fingerprint_id = cf.id"
@@ -217,10 +213,10 @@ impl IndexService {
 
         let entries = stmt.query_map([], |row| {
             let fingerprint = ContentFingerprint {
-                total_size: row.get::<_, i64>(5)? as u64,
-                file_count: row.get::<_, i64>(6)? as usize,
-                largest_file_size: row.get::<_, i64>(7)? as u64,
-                files_hash: row.get(8)?,
+                total_size: row.get::<_, i64>(3)? as u64,
+                file_count: row.get::<_, i64>(4)? as usize,
+                largest_file_size: row.get::<_, i64>(5)? as u64,
+                files_hash: row.get(6)?,
             };
 
             Ok(FingerprintEntry {
@@ -228,8 +224,6 @@ impl IndexService {
                 info_hash: row.get(0)?,
                 site_id: row.get(1)?,
                 torrent_id: row.get(2)?,
-                name: row.get(3)?,
-                save_path: row.get(4)?,
             })
         })?;
 

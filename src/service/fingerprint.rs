@@ -163,8 +163,6 @@ pub struct FingerprintEntry {
     pub info_hash: String,
     pub site_id: String,
     pub torrent_id: Option<String>,
-    pub name: Option<String>,
-    pub save_path: Option<String>,
 }
 
 impl FingerprintMatcher {
@@ -210,32 +208,11 @@ impl FingerprintMatcher {
         matches
     }
 
-    /// Find matches for a torrent, excluding entries from the same site
-    pub fn find_cross_site_matches(
-        &self,
-        fingerprint: &ContentFingerprint,
-        exclude_site: &str,
-    ) -> Vec<MatchedEntry> {
-        self.find_matches(fingerprint)
-            .into_iter()
-            .filter(|m| m.entry.site_id != exclude_site)
-            .collect()
-    }
-
     /// Get total number of entries
     pub fn len(&self) -> usize {
         self.size_index.values().map(|v| v.len()).sum()
     }
 
-    /// Check if the matcher is empty
-    pub fn is_empty(&self) -> bool {
-        self.size_index.is_empty()
-    }
-
-    /// Clear all entries
-    pub fn clear(&mut self) {
-        self.size_index.clear();
-    }
 }
 
 impl Default for FingerprintMatcher {
