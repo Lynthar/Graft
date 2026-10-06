@@ -1,41 +1,52 @@
 # Graft
 
 [![license](https://img.shields.io/github/license/Lynthar/Graft)](LICENSE)
-[![status](https://img.shields.io/badge/status-work%20in%20progress-orange)](#status)
+![status](https://img.shields.io/badge/status-in%20development-orange)
 
-Work-in-progress Rust rewrite of a PT cross-seeding tool. It finds cross-seeds on NexusPHP trackers by piece hash, but hasn't yet been run end to end against real trackers.
+Self-hosted cross-seeding for private trackers, with no cloud index. Still in development.
 
-> **Read this before you clone.** The cross-seeding flow is written and tested
-> against mock servers, not yet against real trackers. There are no releases or
-> published images, the database layout may still change without an upgrade
-> path, and credentials are stored in plain text. Watch it if you like; don't
-> deploy it.
+> **Still in development.** This README describes Graft as it will be when
+> finished, and not all of it works yet. Until then there are no releases, the
+> database may have to be recreated after an update, and the network protections
+> under [Security](#security) are incomplete: keep it on loopback.
 
 Cross-seeding for private trackers: take the torrents you already seed, find
 the same content on other trackers you belong to, and add those torrents to your
 client so the data you already have seeds there too.
+
+Everything runs on your machine. There is no cloud index and no account to
+register: Graft talks only to your torrent client and the trackers you are a
+member of, and sends nothing anywhere else.
 
 It descends from IYUUPlus. I wrote the Rust source from scratch and embedded the
 web UI in a single binary, but this repository carries the full upstream git
 history, so most of its commits are not mine. Upstream continues at
 [ledccn/iyuuplus-dev](https://github.com/ledccn/iyuuplus-dev).
 
-## Status
+## Features
 
-**What works, against mocks**: reading a qBittorrent client, asking NexusPHP
-trackers which of its contents they carry, previewing the candidates, and adding
-the ones you confirm to qBittorrent. The test suite runs the real binary against
-a mock qBittorrent and mock trackers. Adding to Transmission is written but not
-covered by those tests.
-
-**What hasn't been checked**: a full run against real trackers. Their pieces-hash
-endpoint was probed with a real account on three NexusPHP sites (two answer, one
-doesn't have it), but downloading and adding through Graft hasn't been tried on
-a live client yet.
-
-**What isn't written**: lookups on Unit3D and Gazelle trackers, importing a
-`.torrent` by hand, hard-link cross-seeding for files laid out differently, the
-scheduler and any automatic re-seeding, notifications, and internationalisation.
+- **Clients**: qBittorrent and Transmission, checked as soon as you add them.
+- **Trackers**: twelve built in, across NexusPHP, Unit3D and Gazelle; your own
+  are added the same way. Each asks only for the credentials its platform needs.
+- **Finding matches**: NexusPHP trackers are asked directly, by piece hash, which
+  of your contents they carry. For any other tracker, import its `.torrent` by
+  hand.
+- **Preview first**: every match shows where it comes from and goes to, how sure
+  Graft is and why, and the save path it will use. Leave out single matches or a
+  whole save directory.
+- **Careful adding**: torrents are added stopped, at the existing save path,
+  tagged `graft`, and your client checks the data before anything seeds. A run
+  can be stopped and started again without adding anything twice, and can add
+  to a different client from the one it read.
+- **Different layouts**: when a tracker's torrent names files or folders
+  differently, Graft can hard-link your data into the layout it expects, leaving
+  the originals alone, and download files you don't have. Each one is asked
+  separately.
+- **History**: every run records what was added where, what was skipped, and
+  what failed at which step.
+- **Easy on trackers**: requests to each tracker are spaced out and downloads
+  are capped per day, both set per tracker.
+- The web UI is in Chinese.
 
 ## How it works
 
@@ -43,18 +54,14 @@ scheduler and any automatic re-seeding, notifications, and internationalisation.
    tracker from its tracker domain.
 2. For every complete torrent it computes the SHA-1 of the torrent's piece
    hashes and asks each NexusPHP tracker you choose, through
-   `POST /api/pieces-hash`, whether it has a torrent with the same pieces.
-   Nothing else leaves your machine: the lookups go only to trackers you are a
-   member of, signed with your own passkey.
+   `POST /api/pieces-hash`, whether it has a torrent with the same pieces. The
+   lookups go only to trackers you are a member of, signed with your own
+   passkey.
 3. The preview lists every match. You pick which ones to add.
 4. For each one it downloads the tracker's `.torrent`, checks that its pieces
    and file layout match the files you already have, and adds it to the client
    stopped, tagged `graft`, at the existing save path. Your client checks the
    data before anything seeds; starting the torrents is up to you.
-
-Requests to each tracker are spaced out (10 a minute by default) and capped per
-day (20 downloads by default); both are set per tracker. Twelve trackers are
-built in, across three tracker platforms, and you can add your own.
 
 ## Building
 
@@ -75,8 +82,6 @@ cargo build --release
 
 Build the frontend first. Without `web/dist` the binary still compiles, but
 serves a page asking you to build the frontend.
-
-There are no release binaries or published images.
 
 It listens on `127.0.0.1:3000` and creates `./data/graft.db` in the working
 directory. The compose file publishes the port on `127.0.0.1` only.
@@ -101,31 +106,30 @@ start-up rather than being ignored.
 
 ## Limitations
 
-- **Only NexusPHP trackers can be searched**, and only those running a release
-  from July 2023 or later; older or heavily modified ones answer 404. Unit3D and
-  Gazelle have no comparable endpoint.
-- **qBittorrent only, as the source.** Transmission doesn't report piece hashes;
-  it can still be the client torrents are added to.
-- **Same layout only.** A match whose file names or folders differ from yours is
-  listed but not added.
-- **No scheduling.** Cross-seeding is manual: preview, pick, add.
-- **No stable database yet.** Until the first release the schema can change; a
-  database from an older build is refused at start-up and has to be recreated.
+- **Direct lookups need NexusPHP** from July 2023 or later; older or heavily
+  modified ones answer 404, and Unit3D and Gazelle have no comparable endpoint.
+  For those, import `.torrent` files by hand.
+- **qBittorrent is the source for lookups.** Transmission doesn't report piece
+  hashes; it can still be the client torrents are added to.
+- **Hard links need the data at hand.** Graft must see the client's data
+  directory, on the same file system as the links, so not with a remote client
+  or a container without the data volume.
+- **No scheduling or notifications.** Cross-seeding is manual: preview, pick,
+  add.
+- **Not for the public internet.** There is no TLS; for remote access, put it
+  behind your own reverse proxy or VPN.
 
 ## Security
 
-**Do not expose this to any network you don't control.** As it stands:
-
 - Downloader passwords and tracker passkeys are **stored in plain text**, in a
-  database file created with default permissions.
-- The web UI has **no authentication of any kind**.
-- It binds `127.0.0.1` by default and sends no CORS headers, so ordinary web
-  pages can't read its responses. It doesn't yet check the `Host` or `Origin`
-  header, so a DNS-rebinding page could still drive it.
-
-Anything that can reach the port can read and change every setting, and can make
-it send your passkeys to an address of its choosing. Keep it on loopback, on a
-host you trust.
+  database file only its owner can read. They are never logged or shown back by
+  the interface, but anyone who can read the file has them.
+- It listens on `127.0.0.1` by default. Listening on any other address requires
+  an access password.
+- Requests with a foreign `Host` or `Origin` header are refused, so other web
+  pages can't drive it, DNS rebinding included.
+- Trackers are reached over HTTPS, and each passkey is sent only to its own
+  tracker.
 
 ## License
 
