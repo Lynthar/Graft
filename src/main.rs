@@ -4,7 +4,7 @@
 //! by matching content fingerprints (file size, structure) rather than relying
 //! on cloud-based hash matching services.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::info;
 
 mod api;
@@ -36,7 +36,8 @@ async fn main() -> Result<()> {
 
     // Initialize database
     let db = Database::new(&settings.database.path)?;
-    db.migrate()?;
+    db.migrate()
+        .with_context(|| format!("Cannot use database {:?}", settings.database.path))?;
     info!("Database initialized at {:?}", settings.database.path);
 
     // Create application state

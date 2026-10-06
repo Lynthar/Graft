@@ -47,7 +47,7 @@ pub async fn list(
 ) -> Result<Json<Vec<SiteResponse>>, AppError> {
     let conn = state.db.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, name, base_url, template_type, passkey, cookie_encrypted, enabled FROM sites ORDER BY name"
+        "SELECT id, name, base_url, template_type, passkey, cookie, enabled FROM sites ORDER BY name"
     )?;
 
     let sites = stmt
@@ -82,7 +82,7 @@ pub async fn get_one(
 ) -> Result<Json<SiteResponse>, AppError> {
     let conn = state.db.conn();
     let site = conn.query_row(
-        "SELECT id, name, base_url, template_type, passkey, cookie_encrypted, enabled FROM sites WHERE id = ?1",
+        "SELECT id, name, base_url, template_type, passkey, cookie, enabled FROM sites WHERE id = ?1",
         [&id],
         |row| {
             let template_str: String = row.get(3)?;
@@ -131,13 +131,13 @@ pub async fn create(
 
     // Insert or update (upsert)
     conn.execute(
-        "INSERT INTO sites (id, name, base_url, template_type, passkey, cookie_encrypted, enabled)
+        "INSERT INTO sites (id, name, base_url, template_type, passkey, cookie, enabled)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
          ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             base_url = excluded.base_url,
             passkey = COALESCE(excluded.passkey, passkey),
-            cookie_encrypted = COALESCE(excluded.cookie_encrypted, cookie_encrypted),
+            cookie = COALESCE(excluded.cookie, cookie),
             updated_at = datetime('now')",
         rusqlite::params![
             req.id,
@@ -197,7 +197,7 @@ pub async fn update(
             params.push(Box::new(passkey.clone()));
         }
         if let Some(ref cookie) = req.cookie {
-            updates.push("cookie_encrypted = ?");
+            updates.push("cookie = ?");
             params.push(Box::new(cookie.clone()));
         }
         if let Some(enabled) = req.enabled {

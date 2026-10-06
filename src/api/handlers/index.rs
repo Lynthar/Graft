@@ -53,7 +53,7 @@ pub async fn clear_site(
 fn get_client_config(state: &AppState, id: &str) -> Result<ClientConfig, AppError> {
     let conn = state.db.conn();
     conn.query_row(
-        "SELECT id, name, client_type, host, port, username, password_encrypted, use_https FROM clients WHERE id = ?1",
+        "SELECT id, name, client_type, host, port, username, password, use_https FROM clients WHERE id = ?1",
         [id],
         |row| {
             let client_type_str: String = row.get(2)?;

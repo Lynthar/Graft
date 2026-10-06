@@ -97,7 +97,7 @@ pub async fn create(
 
     let conn = state.db.conn();
     conn.execute(
-        "INSERT INTO clients (id, name, client_type, host, port, username, password_encrypted, use_https, enabled)
+        "INSERT INTO clients (id, name, client_type, host, port, username, password, use_https, enabled)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
         rusqlite::params![
             id,
@@ -106,7 +106,7 @@ pub async fn create(
             req.host,
             req.port,
             req.username,
-            req.password, // TODO: encrypt
+            req.password,
             req.use_https as i32,
         ],
     )?;
@@ -132,7 +132,7 @@ pub async fn update(
     let conn = state.db.conn();
 
     let rows = conn.execute(
-        "UPDATE clients SET name = ?1, client_type = ?2, host = ?3, port = ?4, username = ?5, password_encrypted = ?6, use_https = ?7, updated_at = datetime('now')
+        "UPDATE clients SET name = ?1, client_type = ?2, host = ?3, port = ?4, username = ?5, password = ?6, use_https = ?7, updated_at = datetime('now')
          WHERE id = ?8",
         rusqlite::params![
             req.name,
@@ -205,7 +205,7 @@ pub async fn test(
 fn get_client_config(state: &AppState, id: &str) -> Result<ClientConfig, AppError> {
     let conn = state.db.conn();
     conn.query_row(
-        "SELECT id, name, client_type, host, port, username, password_encrypted, use_https FROM clients WHERE id = ?1",
+        "SELECT id, name, client_type, host, port, username, password, use_https FROM clients WHERE id = ?1",
         [id],
         |row| {
             let client_type_str: String = row.get(2)?;
