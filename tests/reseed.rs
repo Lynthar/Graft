@@ -395,3 +395,63 @@ async fn settings_that_would_be_ignored_stop_the_start() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("GRAFT_PORT"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn requests_for_another_host_or_from_another_page_are_refused() {
+    let graft = Graft::start().await;
+    let http = reqwest::Client::new();
+    let root = format!("http://{}/", graft.authority());
+    let rebound = http.get(&root).header("Host", "evil.example").send().await.unwrap();
+    assert_eq!(rebound.status(), StatusCode::FORBIDDEN);
+    let rebound = http.get(format!("{}/clients", graft.base)).header("Host", "evil.example:80").send().await.unwrap();
+    assert_eq!(rebound.status(), StatusCode::FORBIDDEN);
+
+    let client = json!({"name": "qb", "client_type": "qbittorrent", "host": "127.0.0.1", "port": 1});
+    let from = |origin: String| http.post(format!("{}/clients", graft.base)).header("Origin", origin).json(&client).send();
+    assert_eq!(from("http://evil.example".into()).await.unwrap().status(), StatusCode::FORBIDDEN);
+    assert_eq!(from("null".into()).await.unwrap().status(), StatusCode::FORBIDDEN);
+    assert_eq!(from(format!("http://{}", graft.authority())).await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn with_a_password_the_api_needs_a_login_that_outlives_restarts_but_not_a_new_password() {
+    let graft = Graft::start_in(temp_dir(), &[("GRAFT_PASSWORD", "first")]).await;
+    assert_eq!(graft.call(reqwest::Method::GET, "/clients", None).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(graft.get("/auth").await, json!({"required": true, "authenticated": false}));
+    let page = reqwest::get(format!("http://{}/", graft.authority())).await.unwrap();
+    assert_ne!(page.status(), StatusCode::UNAUTHORIZED, "the page loads so the login form can show");
+
+    assert_eq!(graft.post("/login", json!({"password": "wrong"})).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(graft.post("/login", json!({"password": "first"})).await.0, StatusCode::OK);
+    assert_eq!(graft.call(reqwest::Method::GET, "/clients", None).await.0, StatusCode::OK);
+
+    let graft = graft.restart(&[("GRAFT_PASSWORD", "first")]).await;
+    assert_eq!(graft.call(reqwest::Method::GET, "/clients", None).await.0, StatusCode::OK);
+
+    let graft = graft.restart(&[("GRAFT_PASSWORD", "second")]).await;
+    assert_eq!(graft.call(reqwest::Method::GET, "/clients", None).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(graft.post("/login", json!({"password": "second"})).await.0, StatusCode::OK);
+    assert_eq!(graft.post("/logout", json!({})).await.0, StatusCode::OK);
+    assert_eq!(graft.call(reqwest::Method::GET, "/clients", None).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn listening_beyond_loopback_without_a_password_is_refused_at_start() {
+    // Graft must exit before it binds: binding 0.0.0.0 here would open a port on the network.
+    let dir = temp_dir();
+    let mut child = graft_command(&dir, 1).env("GRAFT_HOST", "0.0.0.0").spawn().unwrap();
+    let mut status = None;
+    for _ in 0..100 {
+        status = child.try_wait().unwrap();
+        if status.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _ = child.kill();
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(child.stderr.as_mut().unwrap(), &mut stderr).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(status.is_some_and(|s| !s.success()), "graft kept running");
+    assert!(stderr.contains("GRAFT_PASSWORD"), "{stderr}");
+}

@@ -1,9 +1,11 @@
 //! HTTP API layer
 
+mod auth;
 mod error;
 pub mod handlers;
 
 use axum::{
+    middleware,
     Router,
     routing::{get, post},
 };
@@ -14,6 +16,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+use crate::config::Password;
 use crate::db::Database;
 use crate::service::tasks::TaskRegistry;
 use crate::service::ReseedService;
@@ -32,13 +35,15 @@ pub struct AppState {
     pub db: Database,
     pub reseed: Arc<ReseedService>,
     pub tasks: Arc<TaskRegistry>,
+    access: Arc<auth::Access>,
 }
 
 impl AppState {
-    pub fn new(db: Database) -> Self {
+    pub fn new(db: Database, password: Option<Password>) -> Self {
         Self {
             reseed: Arc::new(ReseedService::new(db.clone())),
             tasks: Arc::default(),
+            access: Arc::new(auth::Access::new(password)),
             db,
         }
     }
@@ -49,6 +54,11 @@ pub fn create_router(state: AppState) -> Router {
     let api_routes = Router::new()
         // Health check
         .route("/health", get(handlers::health))
+
+        // Access
+        .route("/auth", get(auth::status))
+        .route("/login", post(auth::login))
+        .route("/logout", post(auth::logout))
 
         // Clients
         .route("/clients", get(handlers::client::list).post(handlers::client::create))
@@ -74,6 +84,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api", api_routes)
         // Serve static files
         .fallback(handlers::static_handler)
+        .layer(middleware::from_fn_with_state(state.clone(), auth::guard))
         .with_state(state)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

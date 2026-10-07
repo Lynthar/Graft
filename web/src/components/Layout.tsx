@@ -1,11 +1,18 @@
-import { Component, JSX, Suspense } from 'solid-js';
+import { Component, createResource, JSX, Show, Suspense } from 'solid-js';
 import { A } from '@solidjs/router';
+import { fetchAuth, logout } from '../api/auth';
 
 interface LayoutProps {
   children?: JSX.Element;
 }
 
 const Layout: Component<LayoutProps> = (props) => {
+  const [auth] = createResource(fetchAuth);
+  const signOut = async () => {
+    await logout();
+    location.assign('/login');
+  };
+
   return (
     <div class="flex min-h-screen bg-base-300">
       {/* Sidebar */}
@@ -57,6 +64,10 @@ const Layout: Component<LayoutProps> = (props) => {
             </A>
           </li>
         </ul>
+
+        <Show when={auth()?.required}>
+          <button class="btn btn-ghost btn-sm mt-8 w-full" onClick={signOut}>Log out</button>
+        </Show>
       </aside>
 
       {/* Main Content */}

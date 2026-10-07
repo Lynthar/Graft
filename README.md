@@ -6,9 +6,8 @@
 Self-hosted cross-seeding for private trackers, with no cloud index. Still in development.
 
 > **Still in development.** This README describes Graft as it will be when
-> finished, and not all of it works yet. Until then there are no releases, the
-> database may have to be recreated after an update, and the network protections
-> under [Security](#security) are incomplete: keep it on loopback.
+> finished, and not all of it works yet. Until then there are no releases, and
+> the database may have to be recreated after an update.
 
 Cross-seeding for private trackers: take the torrents you already seed, find
 the same content on other trackers you belong to, and add those torrents to your
@@ -70,8 +69,12 @@ With Docker:
 ```bash
 git clone https://github.com/Lynthar/Graft.git
 cd Graft
+echo 'GRAFT_PASSWORD=choose-a-password' > .env
 docker compose up -d
 ```
+
+Inside the container Graft listens on all interfaces, so it needs a password;
+compose reads it from `.env` and refuses to start without one.
 
 By hand, with Node.js 24 and a current stable Rust:
 
@@ -97,9 +100,10 @@ with environment variables taking precedence.
 | `server.host` | `127.0.0.1` |
 | `server.port` | `3000` |
 | `database.path` | `./data/graft.db` |
+| `server.password` | none; required unless `server.host` is loopback |
 
-`GRAFT_HOST`, `GRAFT_PORT`, `GRAFT_DATA_DIR`, `GRAFT_DB_PATH` and `RUST_LOG`
-override them.
+`GRAFT_HOST`, `GRAFT_PORT`, `GRAFT_PASSWORD`, `GRAFT_DATA_DIR`, `GRAFT_DB_PATH`
+and `RUST_LOG` override them.
 
 Unknown keys, or an environment variable that can't be parsed, stop Graft at
 start-up rather than being ignored.
@@ -125,9 +129,15 @@ start-up rather than being ignored.
   database file only its owner can read. They are never logged or shown back by
   the interface, but anyone who can read the file has them.
 - It listens on `127.0.0.1` by default. Listening on any other address requires
-  an access password.
-- Requests with a foreign `Host` or `Origin` header are refused, so other web
-  pages can't drive it, DNS rebinding included.
+  a password, and Graft won't start without one. Each device logs in once and
+  stays logged in for 30 days after it was last used; changing the password logs
+  every device out.
+- Without TLS the password and the session cookie cross the network in the
+  clear. To reach Graft from outside your own network, put it behind a reverse
+  proxy with TLS that forwards the original `Host` header, or use a VPN.
+- Other web pages can't drive it: requests they send are refused by their
+  `Origin`, and without a password Graft answers only requests addressed to this
+  machine, which also stops DNS rebinding.
 - Trackers are reached over HTTPS, and each passkey is sent only to its own
   tracker.
 

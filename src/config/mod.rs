@@ -1,11 +1,12 @@
 //! Configuration management module
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 /// Application settings. Unknown keys are errors: a setting that is accepted must take effect.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     #[serde(default)]
@@ -18,7 +19,7 @@ pub struct Settings {
     config_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerSettings {
     #[serde(default = "default_host")]
@@ -26,9 +27,35 @@ pub struct ServerSettings {
 
     #[serde(default = "default_port")]
     pub port: u16,
+
+    /// Required when `host` is not a loopback address; enforced whenever it is set.
+    #[serde(default)]
+    pub password: Option<Password>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The access password. `Debug` prints a placeholder so the value never reaches a log.
+#[derive(Clone, Deserialize)]
+#[serde(transparent)]
+pub struct Password(String);
+
+impl Password {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Password {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Password(<redacted>)")
+    }
+}
+
+/// `localhost` or a loopback IP address; any other name may reach other machines.
+pub fn is_loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseSettings {
     #[serde(default = "default_db_path")]
@@ -52,6 +79,7 @@ impl Default for ServerSettings {
         Self {
             host: default_host(),
             port: default_port(),
+            password: None,
         }
     }
 }
@@ -91,6 +119,13 @@ impl Settings {
 
         // Override with environment variables
         settings.apply_env_overrides()?;
+        if settings.server.password.is_none() && !is_loopback(&settings.server.host) {
+            anyhow::bail!(
+                "Listening on {} needs a password: set GRAFT_PASSWORD (or server.password), \
+                 or listen on 127.0.0.1",
+                settings.server.host
+            );
+        }
 
         Ok(settings)
     }
@@ -119,6 +154,13 @@ impl Settings {
         }
         if let Ok(path) = std::env::var("GRAFT_DB_PATH") {
             self.database.path = PathBuf::from(path);
+        }
+        if let Ok(password) = std::env::var("GRAFT_PASSWORD") {
+            self.server.password = Some(Password(password));
+        }
+        // An empty password would let anyone in while looking like protection.
+        if self.server.password.as_ref().is_some_and(|p| p.0.is_empty()) {
+            self.server.password = None;
         }
         Ok(())
     }
@@ -171,6 +213,23 @@ mod tests {
     #[test]
     fn listens_on_loopback_by_default() {
         assert_eq!(Settings::default().server.host, "127.0.0.1");
+    }
+
+    #[test]
+    fn only_loopback_names_count_as_loopback() {
+        for host in ["127.0.0.1", "127.1.2.3", "::1", "localhost", "LOCALHOST"] {
+            assert!(is_loopback(host), "{host}");
+        }
+        for host in ["0.0.0.0", "::", "192.168.1.10", "nas.local", "localhost.evil.example"] {
+            assert!(!is_loopback(host), "{host}");
+        }
+    }
+
+    #[test]
+    fn the_password_never_shows_in_debug_output() {
+        let settings: Settings = toml::from_str("[server]\npassword = \"hunter2\"\n").unwrap();
+        assert_eq!(settings.server.password.as_ref().unwrap().expose(), "hunter2");
+        assert!(!format!("{settings:?}").contains("hunter2"));
     }
 
     #[test]

@@ -44,7 +44,10 @@ async fn main() -> Result<()> {
     info!("Database initialized at {:?}", settings.database.path);
 
     // Create application state
-    let state = AppState::new(db);
+    if settings.server.password.is_some() {
+        info!("A password is required to use Graft");
+    }
+    let state = AppState::new(db, settings.server.password.clone());
 
     // Build router
     let app = api::create_router(state);

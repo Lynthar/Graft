@@ -12,6 +12,10 @@ async function request<T>(
     },
   });
 
+  // The login request itself answers 401 to a wrong password; everything else means log in first.
+  if (response.status === 401 && path !== '/login') {
+    location.assign(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+  }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));
     throw new Error(error.error || `HTTP ${response.status}`);
