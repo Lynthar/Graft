@@ -8,6 +8,7 @@ use axum::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 
+use super::secret;
 use crate::api::{AppError, AppState};
 use crate::site::{self, SiteView, TemplateType};
 
@@ -193,10 +194,6 @@ pub async fn remove(
 
 fn not_found(id: &str) -> AppError {
     AppError::not_found(format!("没有 id 为 {id} 的站点"))
-}
-
-fn secret(value: Option<String>) -> Option<String> {
-    value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 fn non_empty(field: &str, value: &str) -> Result<String, AppError> {

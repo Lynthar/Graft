@@ -26,6 +26,10 @@ export const fetchClients = () => api.get<Client[]>('/clients');
 export const createClient = (data: CreateClientRequest) =>
   api.post<Client>('/clients', data);
 
+/** A blank password keeps the stored one. */
+export const updateClient = (id: string, data: CreateClientRequest) =>
+  api.put<Client>(`/clients/${id}`, data);
+
 export const testClient = (id: string) =>
   api.post<{ success: boolean; message: string }>(`/clients/${id}/test`);
 

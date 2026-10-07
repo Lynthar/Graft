@@ -419,6 +419,32 @@ async fn sigterm_finishes_the_torrent_in_flight_records_it_and_exits_cleanly() {
 }
 
 #[tokio::test]
+async fn editing_a_client_keeps_its_password_unless_a_new_one_is_given() {
+    let qb = Qb::default();
+    let qb_addr = qb.start().await;
+    let graft = Graft::start().await;
+    let id = graft.add_qb(qb_addr).await;
+    let edit = |password: Option<&str>| {
+        let mut body = json!({"name": "renamed", "client_type": "qbittorrent", "host": "127.0.0.1",
+            "port": qb_addr.port(), "username": "u", "password": ""});
+        if let Some(p) = password {
+            body["password"] = json!(p);
+        }
+        body
+    };
+    let (path, test_path) = (format!("/clients/{id}"), format!("/clients/{id}/test"));
+    let test = || graft.post(&test_path, json!({}));
+
+    let (status, body) = graft.call(reqwest::Method::PUT, &path, Some(edit(None))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["name"], "renamed");
+    assert_eq!(test().await.1["success"], true, "a blank password keeps the stored one");
+
+    graft.call(reqwest::Method::PUT, &path, Some(edit(Some("wrong")))).await;
+    assert_eq!(test().await.1["success"], false, "a new password replaces it");
+}
+
+#[tokio::test]
 async fn failed_downloads_still_wait_for_the_site_rate_limit() {
     let contents = [movie(), Content::new("show", "Show.S01", &[("e01.mkv", 500)])];
     let s = setup(&contents, json!({"rate_limit_rpm": 60})).await;
