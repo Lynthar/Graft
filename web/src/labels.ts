@@ -12,6 +12,7 @@ const STEP: Record<string, string> = {
   layout: '文件布局',
   add: '加种',
   added: '已加入',
+  link: '硬链接',
 };
 
 const EVIDENCE: Record<string, string> = { pieces_equal: 'pieces 完全相同', files_equal: '文件一致、pieces 不同' };

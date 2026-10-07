@@ -96,6 +96,10 @@ export const startExecute = (data: {
   confirmed_risky_ids: number[];
 }) => api.post<{ task_id: string }>('/reseed/execute', data);
 
+/** Create the hard links an execution offered, for the candidates the user confirmed. */
+export const startLink = (run_id: string, candidate_ids: number[]) =>
+  api.post<{ task_id: string }>('/reseed/link', { run_id, candidate_ids });
+
 export const fetchTask = <T>(id: string) => api.get<Task<T>>(`/tasks/${id}`);
 
 export const cancelTask = (id: string) => api.post<{ cancelling: boolean }>(`/tasks/${id}/cancel`);

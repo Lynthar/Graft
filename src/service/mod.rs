@@ -3,4 +3,4 @@
 mod reseed;
 pub mod tasks;
 
-pub use reseed::{ExecuteRun, ReseedService};
+pub use reseed::{ExecuteRun, LinkRun, ReseedService};

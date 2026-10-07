@@ -474,6 +474,15 @@ impl Drop for Graft {
     }
 }
 
+/// A directory removed when dropped, for tests that put real files on disk.
+pub struct TempDir(pub PathBuf);
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 pub fn temp_dir() -> PathBuf {
     let n = INSTANCE.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!("graft-it-{}-{n}", std::process::id()));
@@ -580,9 +589,14 @@ impl Graft {
     }
 
     pub async fn add_qb(&self, addr: SocketAddr) -> String {
-        let (status, body) = self
-            .post("/clients", json!({"name": "qb", "client_type": "qbittorrent", "host": "127.0.0.1", "port": addr.port(), "username": "u", "password": "p"}))
-            .await;
+        self.add_qb_with(addr, json!({})).await
+    }
+
+    /// Add the mock qB with `extra` fields merged into the request, e.g. `link_dir`.
+    pub async fn add_qb_with(&self, addr: SocketAddr, extra: Value) -> String {
+        let mut client = json!({"name": "qb", "client_type": "qbittorrent", "host": "127.0.0.1", "port": addr.port(), "username": "u", "password": "p"});
+        client.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let (status, body) = self.post("/clients", client).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         body["id"].as_str().unwrap().to_string()
     }
