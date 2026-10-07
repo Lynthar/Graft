@@ -518,6 +518,117 @@ async fn a_hard_link_directory_must_be_absolute_and_blank_clears_it() {
     assert_eq!(updated["link_dir"], Value::Null, "{updated}");
 }
 
+/// Movie.2024 on disk under `<dir>/src`, seeded from site A; site B carries the same pieces
+/// as `renamed`. With `link`, the client links into `<dir>/links`.
+#[cfg(unix)]
+async fn renamed_on_b(renamed: Content, link: bool) -> (Setup, TempDir) {
+    let dir = temp_dir();
+    let content = movie();
+    for (path, len) in content.on_disk() {
+        let file = dir.join("src").join(&path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, vec![7u8; len as usize]).unwrap();
+    }
+    let qb = Qb::default();
+    qb.seed(&content, "A", "tracker.a.test", dir.join("src").to_str().unwrap());
+    let qb_addr = qb.start().await;
+    let site_b = MockSite::new(Lookup::Open);
+    let b_addr = site_b.start().await;
+    let (bytes, hash) = site_b.publish(&renamed, "77", "B");
+    qb.expect_add(&bytes, &hash);
+    let graft = Graft::start().await;
+    let extra = if link { json!({"link_dir": dir.join("links")}) } else { json!({}) };
+    let client = graft.add_qb_with(qb_addr, extra).await;
+    graft.add_site("a", "a.test", None, json!({})).await;
+    graft.add_site("b", "b.test", Some(b_addr), json!({})).await;
+    (Setup { graft, qb, site_b, client }, TempDir(dir))
+}
+
+#[cfg(unix)]
+fn other_name() -> Content {
+    Content { name: "Movie.2024.Other".into(), ..movie() }
+}
+
+#[cfg(unix)]
+fn inode(path: &std::path::Path) -> u64 {
+    std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(path).unwrap())
+}
+
+#[cfg(unix)]
+async fn offer_links(s: &Setup) -> Value {
+    let (preview_id, _) = s.graft.preview(&s.client, &["b"]).await;
+    execute(s, &preview_id, &[0]).await
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_renamed_torrent_is_hard_linked_only_once_confirmed() {
+    let (s, tmp) = renamed_on_b(other_name(), true).await;
+    let dir = &tmp.0;
+    let done = offer_links(&s).await;
+    let item = &done["result"]["items"][0];
+    assert_eq!((&item["status"], &item["step"]), (&json!("skipped"), &json!("link")), "{done}");
+    assert!(s.qb.0.lock().unwrap().adds.is_empty() && !dir.join("links").exists(), "nothing before confirming");
+
+    let run_id = done["result"]["run_id"].as_str().unwrap();
+    let (status, started) = s.graft.post("/reseed/link", json!({"run_id": run_id, "candidate_ids": [0]})).await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let linked = s.graft.wait_task(&started).await;
+    assert_eq!(linked["result"]["success"], 1, "{linked}");
+    for (path, _) in movie().on_disk() {
+        let link = dir.join("links/b").join(path.replacen("Movie.2024", "Movie.2024.Other", 1));
+        assert_eq!(inode(&dir.join("src").join(&path)), inode(&link), "{path}");
+    }
+    let adds = s.qb.0.lock().unwrap().adds.clone();
+    assert_eq!(adds[0]["savepath"], dir.join("links/b").to_str().unwrap());
+    assert_eq!(s.site_b.downloads(), 1, "the torrent fetched for the offer is reused");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn without_a_hard_link_directory_the_skip_says_where_to_set_one() {
+    let (s, _dir) = renamed_on_b(other_name(), false).await;
+    let done = offer_links(&s).await;
+    let item = &done["result"]["items"][0];
+    assert_eq!(item["step"], "layout", "{done}");
+    assert!(item["message"].as_str().unwrap().contains("硬链接目录"), "{done}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_torrent_path_that_climbs_out_of_the_link_directory_is_never_offered() {
+    let mut climbing = other_name();
+    climbing.files[0].0 = "../escape.mkv".into();
+    let (s, tmp) = renamed_on_b(climbing, true).await;
+    let dir = &tmp.0;
+    let done = offer_links(&s).await;
+    let item = &done["result"]["items"][0];
+    assert_eq!(item["step"], "layout", "{done}");
+    assert!(item["message"].as_str().unwrap().contains("不安全"), "{done}");
+    assert!(!dir.join("links").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn another_file_in_the_way_fails_the_link_and_leaves_nothing_behind() {
+    let (s, tmp) = renamed_on_b(other_name(), true).await;
+    let dir = &tmp.0;
+    let done = offer_links(&s).await;
+    let in_the_way = dir.join("links/b/Movie.2024.Other/movie.nfo");
+    std::fs::create_dir_all(in_the_way.parent().unwrap()).unwrap();
+    std::fs::write(&in_the_way, b"mine").unwrap();
+
+    let run_id = done["result"]["run_id"].as_str().unwrap();
+    let (_, started) = s.graft.post("/reseed/link", json!({"run_id": run_id, "candidate_ids": [0]})).await;
+    let linked = s.graft.wait_task(&started).await;
+    let item = &linked["result"]["items"][0];
+    assert_eq!((&item["status"], &item["step"]), (&json!("failed"), &json!("link")), "{linked}");
+    assert!(item["message"].as_str().unwrap().contains("已经有别的文件"), "{linked}");
+    assert!(!dir.join("links/b/Movie.2024.Other/movie.mkv").exists(), "the link made before is removed");
+    assert_eq!(std::fs::read(&in_the_way).unwrap(), b"mine");
+    assert!(s.qb.0.lock().unwrap().adds.is_empty());
+}
+
 #[tokio::test]
 async fn failed_downloads_still_wait_for_the_site_rate_limit() {
     let contents = [movie(), Content::new("show", "Show.S01", &[("e01.mkv", 500)])];

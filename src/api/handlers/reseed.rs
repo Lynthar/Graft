@@ -14,7 +14,7 @@ use crate::api::handlers::client::load_client;
 use crate::api::{AppError, AppState};
 use crate::client::{ClientConfig, ClientType};
 use crate::service::tasks::Snapshot;
-use crate::service::ExecuteRun;
+use crate::service::{ExecuteRun, LinkRun};
 use crate::site;
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +49,15 @@ pub struct ExecuteRequest {
     /// Candidates flagged `needs_confirmation` must also be listed here.
     #[serde(default)]
     pub confirmed_risky_ids: Vec<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkRequest {
+    /// The execution that offered the links.
+    pub run_id: String,
+    /// The offered links the user confirmed, one by one.
+    pub candidate_ids: Vec<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +126,33 @@ pub async fn import(
         service.keep_preview(&task.id, preview.clone());
         Ok(preview)
     });
+    Ok(Json(Started { task_id: task.id.clone() }))
+}
+
+/// Create the hard links an execution offered and the user confirmed, then add the torrents.
+pub async fn link(
+    State(state): State<AppState>,
+    Json(req): Json<LinkRequest>,
+) -> Result<Json<Started>, AppError> {
+    let offered = state
+        .reseed
+        .run_links(&req.run_id)
+        .ok_or_else(|| AppError::bad_request("这一轮待确认的硬链接已失效，请重新执行"))?;
+    if req.candidate_ids.is_empty() {
+        return Err(AppError::bad_request("没有勾选任何条目"));
+    }
+    let plans = req
+        .candidate_ids
+        .iter()
+        .map(|id| offered.plans.get(id).cloned().ok_or_else(|| AppError::bad_request(format!("这一轮没有要硬链接的候选 {id}"))))
+        .collect::<Result<Vec<_>, _>>()?;
+    let target = load_client(&state, &offered.target_client_id)?;
+    let busy = state.reseed.claim_target(&target.id).ok_or_else(|| {
+        AppError::new(StatusCode::CONFLICT, format!("{} 已经有一轮辅种在执行", target.name))
+    })?;
+    let service = state.reseed.clone();
+    let run = LinkRun { plans, target, busy };
+    let task = state.tasks.spawn("execute", move |task| async move { service.link(&task, run).await });
     Ok(Json(Started { task_id: task.id.clone() }))
 }
 

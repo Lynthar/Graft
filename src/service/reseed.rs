@@ -2,6 +2,8 @@
 //! the matching torrents to a target client, stopped, after verifying what was downloaded.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -139,7 +141,62 @@ pub struct ReseedService {
     downloads: reqwest::Client,
     gates: RateGates,
     previews: Mutex<VecDeque<(String, Arc<Preview>)>>,
+    links: Mutex<VecDeque<(String, Arc<RunLinks>)>>,
     busy: Arc<Mutex<HashSet<String>>>,
+}
+
+/// Hard links offered by one execution, waiting for the user to confirm them.
+pub struct RunLinks {
+    pub target_client_id: String,
+    pub plans: HashMap<usize, LinkPlan>,
+}
+
+/// One torrent whose files are named differently from the local ones holding its bytes.
+#[derive(Clone)]
+pub struct LinkPlan {
+    candidate: Candidate,
+    bytes: Arc<Vec<u8>>,
+    info_hash: String,
+    /// Save path for the torrent: `<link_dir>/<site>`.
+    root: PathBuf,
+    /// (local file, link to create), in torrent order.
+    links: Vec<(PathBuf, PathBuf)>,
+}
+
+/// Confirmed hard links to create, validated by the caller.
+pub struct LinkRun {
+    pub plans: Vec<LinkPlan>,
+    pub target: ClientConfig,
+    pub busy: BusyGuard,
+}
+
+/// What one execution carries from torrent to torrent.
+struct RunContext<'a> {
+    source: &'a dyn BitTorrentClient,
+    target: &'a dyn BitTorrentClient,
+    target_id: &'a str,
+    link_dir: Option<&'a str>,
+    added: HashSet<String>,
+    links: HashMap<usize, LinkPlan>,
+}
+
+enum Added {
+    Yes { warning: Option<String> },
+    AlreadyThere,
+    No(String),
+}
+
+impl ExecuteSummary {
+    fn new() -> Self {
+        ExecuteSummary {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            success: 0,
+            skipped: 0,
+            failed: 0,
+            not_attempted: 0,
+            items: Vec::new(),
+        }
+    }
 }
 
 struct SourceScan {
@@ -189,6 +246,7 @@ impl ReseedService {
             downloads: build(reqwest::redirect::Policy::limited(5)),
             gates: RateGates::default(),
             previews: Mutex::new(VecDeque::new()),
+            links: Mutex::new(VecDeque::new()),
             busy: Arc::default(),
         }
     }
@@ -207,7 +265,6 @@ impl ReseedService {
         })
     }
 
-    /// Read the source client, then ask every target site which contents it carries.
     /// Read the source client: its complete torrents, the site each belongs to, and
     /// their pieces hashes where those can be read.
     async fn scan_source(&self, task: &Task, source: &ClientConfig) -> anyhow::Result<SourceScan> {
@@ -242,6 +299,7 @@ impl ReseedService {
         Ok(SourceScan { client, sites: all_sites, report, complete, pieces })
     }
 
+    /// Read the source client, then ask every target site which contents it carries.
     pub async fn preview(&self, task: &Task, source: ClientConfig, targets: Vec<Site>) -> anyhow::Result<Preview> {
         let SourceScan { report, complete, pieces, .. } = self.scan_source(task, &source).await?;
         let mut preview = Preview {
@@ -481,82 +539,112 @@ impl ReseedService {
     /// Add the confirmed candidates one by one, recording each outcome.
     pub async fn execute(&self, task: &Task, run: ExecuteRun) -> anyhow::Result<ExecuteSummary> {
         let ExecuteRun { candidates, source, target, busy: _busy } = run;
-        let run_id = uuid::Uuid::new_v4().to_string();
         let source_client = source.create_client();
         let target_client = target.create_client();
-        let mut summary = ExecuteSummary {
-            run_id: run_id.clone(),
-            success: 0,
-            skipped: 0,
-            failed: 0,
-            not_attempted: 0,
-            items: Vec::new(),
+        let mut ctx = RunContext {
+            source: source_client.as_ref(),
+            target: target_client.as_ref(),
+            target_id: &target.id,
+            link_dir: target.link_dir.as_deref(),
+            added: HashSet::new(),
+            links: HashMap::new(),
         };
-        let mut added: HashSet<String> = HashSet::new();
-
+        let mut summary = ExecuteSummary::new();
         for (i, candidate) in candidates.iter().enumerate() {
             if task.is_cancelled() {
                 summary.not_attempted = candidates.len() - i;
                 break;
             }
             task.progress("加种", i, candidates.len());
-            let outcome = self
-                .execute_one(task, candidate, source_client.as_ref(), target_client.as_ref(), &target.id, &mut added)
-                .await;
+            let outcome = self.execute_one(task, candidate, &mut ctx).await;
             if outcome.step == "cancelled" {
                 summary.not_attempted = candidates.len() - i;
                 break;
             }
-            self.db.conn().execute(
-                "INSERT INTO reseed_results (run_id, source_hash, source_name, source_site, target_site,
-                     target_torrent_id, target_client, target_hash, status, step, message, downloaded)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                rusqlite::params![
-                    run_id,
-                    candidate.source_hash,
-                    candidate.source_name,
-                    candidate.source_site,
-                    candidate.target_site,
-                    candidate.target_torrent_id,
-                    target.id,
-                    outcome.target_hash,
-                    outcome.status,
-                    outcome.step,
-                    outcome.message,
-                    outcome.downloaded,
-                ],
-            )?;
-            match outcome.status {
-                "success" => summary.success += 1,
-                "skipped" => summary.skipped += 1,
-                _ => summary.failed += 1,
-            }
-            summary.items.push(ItemResult {
-                candidate_id: candidate.id,
-                target_site: candidate.target_site.clone(),
-                source_name: candidate.source_name.clone(),
-                status: outcome.status,
-                step: outcome.step,
-                message: outcome.message,
-            });
+            self.record(&mut summary, candidate, &target.id, outcome)?;
         }
         task.progress("完成", candidates.len(), candidates.len());
-        info!(run = %run_id, success = summary.success, skipped = summary.skipped, failed = summary.failed, "reseed run finished");
+        if !ctx.links.is_empty() {
+            self.keep_links(&summary.run_id, RunLinks { target_client_id: target.id.clone(), plans: ctx.links });
+        }
+        info!(run = %summary.run_id, success = summary.success, skipped = summary.skipped, failed = summary.failed, "reseed run finished");
         Ok(summary)
     }
 
-    async fn execute_one(
-        &self,
-        task: &Task,
-        candidate: &Candidate,
-        source: &dyn BitTorrentClient,
-        target: &dyn BitTorrentClient,
-        target_id: &str,
-        added: &mut HashSet<String>,
-    ) -> Outcome {
+    /// Hard-link and add the torrents of an earlier run that the user confirmed one by one.
+    pub async fn link(&self, task: &Task, run: LinkRun) -> anyhow::Result<ExecuteSummary> {
+        let LinkRun { plans, target, busy: _busy } = run;
+        let client = target.create_client();
+        let mut summary = ExecuteSummary::new();
+        for (i, plan) in plans.iter().enumerate() {
+            if task.is_cancelled() {
+                summary.not_attempted = plans.len() - i;
+                break;
+            }
+            task.progress("建硬链接", i, plans.len());
+            let mut outcome = link_and_add(client.as_ref(), plan).await;
+            outcome.target_hash = Some(plan.info_hash.clone());
+            self.record(&mut summary, &plan.candidate, &target.id, outcome)?;
+        }
+        task.progress("完成", plans.len(), plans.len());
+        Ok(summary)
+    }
+
+    /// Write one result to the history and count it in `summary`.
+    fn record(&self, summary: &mut ExecuteSummary, candidate: &Candidate, target_id: &str, outcome: Outcome) -> anyhow::Result<()> {
+        self.db.conn().execute(
+            "INSERT INTO reseed_results (run_id, source_hash, source_name, source_site, target_site,
+                 target_torrent_id, target_client, target_hash, status, step, message, downloaded)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                summary.run_id,
+                candidate.source_hash,
+                candidate.source_name,
+                candidate.source_site,
+                candidate.target_site,
+                candidate.target_torrent_id,
+                target_id,
+                outcome.target_hash,
+                outcome.status,
+                outcome.step,
+                outcome.message,
+                outcome.downloaded,
+            ],
+        )?;
+        match outcome.status {
+            "success" => summary.success += 1,
+            "skipped" => summary.skipped += 1,
+            _ => summary.failed += 1,
+        }
+        summary.items.push(ItemResult {
+            candidate_id: candidate.id,
+            target_site: candidate.target_site.clone(),
+            source_name: candidate.source_name.clone(),
+            status: outcome.status,
+            step: outcome.step,
+            message: outcome.message,
+        });
+        Ok(())
+    }
+
+    fn keep_links(&self, run_id: &str, links: RunLinks) {
+        let mut kept = self.links.lock().expect("link list poisoned");
+        kept.push_back((run_id.to_string(), Arc::new(links)));
+        while kept.len() > KEEP_PREVIEWS {
+            kept.pop_front();
+        }
+    }
+
+    /// The hard links an execution offered, while it is among the most recent ones.
+    pub fn run_links(&self, run_id: &str) -> Option<Arc<RunLinks>> {
+        let kept = self.links.lock().expect("link list poisoned");
+        kept.iter().find(|(id, _)| id == run_id).map(|(_, l)| l.clone())
+    }
+
+    async fn execute_one(&self, task: &Task, candidate: &Candidate, ctx: &mut RunContext<'_>) -> Outcome {
         if let Some(bytes) = &candidate.torrent {
             // An uploaded torrent needs nothing from its site: no download, no daily limit.
-            return self.verify_and_add(candidate, Ok(bytes.to_vec()), source, target, added).await;
+            return self.verify_and_add(candidate, Ok(bytes.to_vec()), ctx).await;
         }
         let site = match site::load(&self.db.conn(), &candidate.target_site) {
             Ok(Some(s)) if s.enabled => s,
@@ -567,7 +655,7 @@ impl ReseedService {
         let earlier: Option<String> = match self.db.conn().query_row(
             "SELECT target_hash FROM reseed_results WHERE status = 'success' AND target_site = ?1
                AND target_torrent_id = ?2 AND target_client = ?3 ORDER BY id DESC LIMIT 1",
-            [site.id.as_str(), candidate.target_torrent_id.as_str(), target_id],
+            [site.id.as_str(), candidate.target_torrent_id.as_str(), ctx.target_id],
             |r| r.get(0),
         ) {
             Ok(h) => h,
@@ -575,7 +663,7 @@ impl ReseedService {
             Err(e) => return Outcome::new("failed", "exists", e.to_string()),
         };
         if let Some(hash) = earlier {
-            if let Ok(true) = target.has_torrent(&hash).await {
+            if let Ok(true) = ctx.target.has_torrent(&hash).await {
                 let mut o = Outcome::new("skipped", "exists", "之前的执行已经加过，下载器里还在");
                 o.target_hash = Some(hash);
                 return o;
@@ -608,7 +696,7 @@ impl ReseedService {
             downloaded,
             Err(site::templates::TemplateError::MissingPasskey | site::templates::TemplateError::MissingAuthkey)
         );
-        let mut outcome = self.verify_and_add(candidate, downloaded, source, target, added).await;
+        let mut outcome = self.verify_and_add(candidate, downloaded, ctx).await;
         outcome.downloaded = requested;
         outcome
     }
@@ -617,9 +705,7 @@ impl ReseedService {
         &self,
         candidate: &Candidate,
         downloaded: Result<Vec<u8>, site::templates::TemplateError>,
-        source: &dyn BitTorrentClient,
-        target: &dyn BitTorrentClient,
-        added: &mut HashSet<String>,
+        ctx: &mut RunContext<'_>,
     ) -> Outcome {
         let bytes = match downloaded {
             Ok(b) => b,
@@ -640,66 +726,215 @@ impl ReseedService {
                 "下载到的种子 pieces 与查询结果不符",
             ));
         }
-        if added.contains(&meta.info_hash) {
+        if ctx.added.contains(&meta.info_hash) {
             return with_hash(Outcome::new("skipped", "exists", "本轮已经加过"));
         }
-        match target.has_torrent(&meta.info_hash).await {
+        match ctx.target.has_torrent(&meta.info_hash).await {
             Ok(true) => return with_hash(Outcome::new("skipped", "exists", "目标下载器里已经有这个种子")),
             Ok(false) => {}
             Err(e) => return with_hash(Outcome::new("failed", "exists", format!("读不了目标下载器：{e}"))),
         }
 
-        let on_disk = match source.get_torrent_files(&candidate.source_hash).await {
-            Ok(files) => {
-                let mut f: Vec<(String, u64)> = files.into_iter().map(|f| (f.name, f.size)).collect();
-                f.sort();
-                f
-            }
+        // In torrent order: with equal pieces, the i-th files of both hold the same bytes.
+        let local: Vec<(String, u64)> = match ctx.source.get_torrent_files(&candidate.source_hash).await {
+            Ok(files) => files.into_iter().map(|f| (f.name, f.size)).collect(),
             Err(e) => return with_hash(Outcome::new("failed", "layout", format!("读不了本地的文件列表：{e}"))),
         };
-        let mut wanted = meta.files.clone();
+        let (mut on_disk, mut wanted) = (local.clone(), meta.files.clone());
+        on_disk.sort();
         wanted.sort();
         if wanted != on_disk {
-            let first = wanted.iter().zip(&on_disk).find(|(a, b)| a != b).map(|(a, b)| (a.0.clone(), b.0.clone()));
-            let detail = match first {
-                Some((want, have)) => format!("种子里是 {want:?}，磁盘上是 {have:?}"),
-                None => format!("种子里有 {} 个文件，磁盘上有 {} 个", wanted.len(), on_disk.len()),
-            };
-            return with_hash(Outcome::new(
-                "skipped",
-                "layout",
-                format!("pieces 相同但文件布局不同，需要硬链接辅种（尚未支持）：{detail}"),
-            ));
+            return with_hash(match plan_links(candidate, &meta, &local, ctx.link_dir) {
+                Err(why) => Outcome::new("skipped", "layout", why),
+                Ok(plan) => {
+                    let (have, want) = (&local[0].0, &meta.files[0].0);
+                    let message = format!(
+                        "文件名与本地不同，可以在 {} 建 {} 个硬链接加入（如 {want} ← {have}），源文件不动；在执行结果里勾选确认",
+                        plan.0.display(),
+                        plan.1.len(),
+                    );
+                    let (root, links) = plan;
+                    let info_hash = meta.info_hash.clone();
+                    let plan = LinkPlan { candidate: candidate.clone(), bytes: Arc::new(bytes), info_hash, root, links };
+                    ctx.links.insert(candidate.id, plan);
+                    Outcome::new("skipped", "link", message)
+                }
+            });
         }
 
-        let options = AddTorrentOptions { save_path: candidate.save_path.clone(), tags: vec![TAG.to_string()] };
-        let add_error = match target.add_torrent(&bytes, options).await {
-            Ok(()) => None,
-            Err(ClientError::Duplicate) => {
-                return with_hash(Outcome::new("skipped", "exists", "目标下载器里已经有这个种子"))
+        with_hash(match add_confirmed(ctx.target, &bytes, &meta.info_hash, candidate.save_path.clone()).await {
+            Added::Yes { warning } => {
+                ctx.added.insert(meta.info_hash.clone());
+                Outcome::new("success", "added", with_warning("已暂停加入，下载器校验数据后才会做种".into(), warning))
             }
-            Err(e) => Some(e.to_string()),
-        };
-        // Only the client's own list counts as proof; acceptance can lag the request.
-        for attempt in 0..5 {
-            if attempt > 0 {
-                tokio::time::sleep(Duration::from_millis(400)).await;
-            }
-            if let Ok(true) = target.has_torrent(&meta.info_hash).await {
-                added.insert(meta.info_hash.clone());
-                let mut message = "已暂停加入，下载器校验数据后才会做种".to_string();
-                if let Some(e) = &add_error {
-                    message.push_str(&format!("。警告：{e}"));
-                }
-                return with_hash(Outcome::new("success", "added", message));
-            }
-        }
-        with_hash(Outcome::new(
-            "failed",
-            "add",
-            add_error.unwrap_or_else(|| "加入后下载器的列表里没有这个种子".into()),
-        ))
+            Added::AlreadyThere => Outcome::new("skipped", "exists", "目标下载器里已经有这个种子"),
+            Added::No(why) => Outcome::new("failed", "add", why),
+        })
     }
+}
+
+/// Add stopped, then wait for the client to list it: its own list is the only proof,
+/// and acceptance can lag the request.
+async fn add_confirmed(target: &dyn BitTorrentClient, bytes: &[u8], info_hash: &str, save_path: String) -> Added {
+    let options = AddTorrentOptions { save_path, tags: vec![TAG.to_string()] };
+    let add_error = match target.add_torrent(bytes, options).await {
+        Ok(()) => None,
+        Err(ClientError::Duplicate) => return Added::AlreadyThere,
+        Err(e) => Some(e.to_string()),
+    };
+    for attempt in 0..5 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+        if let Ok(true) = target.has_torrent(info_hash).await {
+            return Added::Yes { warning: add_error };
+        }
+    }
+    Added::No(add_error.unwrap_or_else(|| "加入后下载器的列表里没有这个种子".into()))
+}
+
+fn with_warning(mut message: String, warning: Option<String>) -> String {
+    if let Some(w) = warning {
+        message.push_str(&format!("。警告：{w}"));
+    }
+    message
+}
+
+async fn link_and_add(target: &dyn BitTorrentClient, plan: &LinkPlan) -> Outcome {
+    match target.has_torrent(&plan.info_hash).await {
+        Ok(true) => return Outcome::new("skipped", "exists", "目标下载器里已经有这个种子"),
+        Ok(false) => {}
+        Err(e) => return Outcome::new("failed", "exists", format!("读不了目标下载器：{e}")),
+    }
+    let created = match make_links(&plan.links) {
+        Ok(created) => created,
+        Err(why) => return Outcome::new("failed", "link", why),
+    };
+    let save_path = plan.root.to_string_lossy().into_owned();
+    match add_confirmed(target, &plan.bytes, &plan.info_hash, save_path).await {
+        Added::Yes { warning } => {
+            let message = format!("已在 {} 建好硬链接并暂停加入，下载器校验数据后才会做种", plan.root.display());
+            Outcome::new("success", "link", with_warning(message, warning))
+        }
+        Added::AlreadyThere => {
+            remove_links(&created);
+            Outcome::new("skipped", "exists", "目标下载器里已经有这个种子")
+        }
+        Added::No(why) => {
+            remove_links(&created);
+            Outcome::new("failed", "link", why)
+        }
+    }
+}
+
+/// Pair each file of the torrent with the local file holding the same bytes, as a link
+/// under `<link_dir>/<site>`. Returns that directory and the (local file, link) pairs.
+fn plan_links(
+    candidate: &Candidate,
+    meta: &torrent::Metainfo,
+    local: &[(String, u64)],
+    link_dir: Option<&str>,
+) -> Result<(PathBuf, Vec<(PathBuf, PathBuf)>), String> {
+    let same_split = local.len() == meta.files.len() && local.iter().zip(&meta.files).all(|(a, b)| a.1 == b.1);
+    if !same_split {
+        return Err(format!(
+            "pieces 相同但文件切分不同（种子里 {} 个文件，本地 {} 个），没法用硬链接",
+            meta.files.len(),
+            local.len()
+        ));
+    }
+    let Some(dir) = link_dir else {
+        return Err("文件名与本地不同，可以用硬链接辅种：先在下载器设置里填「硬链接目录」".into());
+    };
+    let site = if candidate.target_site.is_empty() { "upload" } else { candidate.target_site.as_str() };
+    let root = Path::new(dir).join(site);
+    let save_path = Path::new(&candidate.save_path);
+    // Links must never land inside the local torrent's own folder (or on its single file).
+    let local_root = local.first().and_then(|(p, _)| p.split('/').next()).map(|top| save_path.join(top));
+    if local_root.is_some_and(|top| root.starts_with(&top)) {
+        return Err(format!("硬链接目录 {} 落在本地种子自己的目录里，换一个目录", root.display()));
+    }
+    let links = local
+        .iter()
+        .zip(&meta.files)
+        .map(|((have, _), (want, _))| {
+            let rel = safe_relative(want).ok_or_else(|| format!("种子里的路径不安全，不建链接：{want:?}"))?;
+            Ok((save_path.join(have), root.join(rel)))
+        })
+        .collect::<Result<_, String>>()?;
+    Ok((root, links))
+}
+
+/// `path` from a torrent as a relative path, or `None` if any part could step outside the
+/// directory it is joined to: `..`, an empty part, a backslash, NUL, or a drive or root.
+fn safe_relative(path: &str) -> Option<PathBuf> {
+    let parts_ok = path.split('/').all(|p| !p.is_empty() && !p.contains(['\\', '\0']));
+    let rel: PathBuf = path.split('/').collect();
+    let normal = rel.components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    (parts_ok && normal).then_some(rel)
+}
+
+/// Create every link; one that already points at the same file is kept as it is. On
+/// failure the links made here are removed again. Returns the links it created.
+fn make_links(links: &[(PathBuf, PathBuf)]) -> Result<Vec<PathBuf>, String> {
+    let mut created = Vec::new();
+    for (src, dst) in links {
+        if let Err(why) = link_file(src, dst, &mut created) {
+            remove_links(&created);
+            return Err(why);
+        }
+    }
+    Ok(created)
+}
+
+fn remove_links(created: &[PathBuf]) {
+    for link in created {
+        if let Err(e) = std::fs::remove_file(link) {
+            warn!(link = %link.display(), "could not remove a hard link made for a failed add: {e}");
+        }
+    }
+}
+
+fn link_file(src: &Path, dst: &Path, created: &mut Vec<PathBuf>) -> Result<(), String> {
+    let source = std::fs::metadata(src).map_err(|e| match e.kind() {
+        ErrorKind::NotFound => {
+            format!("Graft 看不到源文件 {}：容器要按下载器看到的同一路径挂载数据", src.display())
+        }
+        _ => format!("读不了源文件 {}：{e}", src.display()),
+    })?;
+    match std::fs::symlink_metadata(dst) {
+        Ok(existing) if same_file(&existing, &source) => return Ok(()),
+        Ok(_) => return Err(format!("{} 已经有别的文件，不覆盖", dst.display())),
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("读不了 {}：{e}", dst.display())),
+    }
+    if let Some(dir) = dst.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("建不了目录 {}：{e}", dir.display()))?;
+    }
+    std::fs::hard_link(src, dst).map_err(|e| match e.kind() {
+        ErrorKind::CrossesDevices => {
+            format!("硬链接目录与 {} 不在同一个文件系统（ZFS 数据集），链不过去", src.display())
+        }
+        ErrorKind::PermissionDenied => format!(
+            "没有权限给 {} 建硬链接：Linux 只允许给自己拥有、或自己能读写的文件建硬链接，\
+             Graft 的 PUID / PGID 要和下载器运行的用户一致",
+            src.display()
+        ),
+        _ => format!("建硬链接失败（{} → {}）：{e}", src.display(), dst.display()),
+    })?;
+    created.push(dst.to_path_buf());
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// Same pieces beats same files; a same-named torrent with other files is only reported,

@@ -79,6 +79,11 @@ compose reads it from `.env` and refuses to start without one. Graft runs as
 the user and group in `PUID` and `PGID` (1000 if unset) and hands `./data` to
 them, so the database there is yours to read and back up.
 
+For hard links, mount your client's data into the container at the same path
+the client sees, and give the client a hard-link directory on the same file
+system. Linux only lets a user hard-link files it owns or can write, so
+`PUID` and `PGID` must match the user that owns the downloads.
+
 By hand, with Node.js 24 and a current stable Rust:
 
 ```bash

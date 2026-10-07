@@ -6,8 +6,10 @@ import {
   fetchTask,
   startExecute,
   startImport,
+  startLink,
   startPreview,
   type ExecuteSummary,
+  type ItemResult,
   type Preview,
   type Task,
 } from '../api/reseed';
@@ -31,6 +33,33 @@ const toBase64 = async (file: File) => {
   return btoa(binary);
 };
 
+const Results: Component<{ summary: ExecuteSummary }> = (props) => (
+  <>
+    <h2 class="card-title">
+      成功 {props.summary.success}，跳过 {props.summary.skipped}，失败 {props.summary.failed}
+      <Show when={props.summary.not_attempted}>，未执行 {props.summary.not_attempted}</Show>
+    </h2>
+    <table class="table table-sm">
+      <tbody>
+        <For each={props.summary.items}>
+          {(i) => (
+            <tr>
+              <td>
+                <span class={`badge badge-sm ${i.status === 'success' ? 'badge-success' : i.status === 'failed' ? 'badge-error' : 'badge-warning'}`}>
+                  {statusLabel(i.status)}
+                </span>
+              </td>
+              <td class="max-w-xs truncate">{i.source_name}</td>
+              <td>{i.target_site}</td>
+              <td class="text-xs"><span class="badge badge-ghost badge-sm mr-1">{stepLabel(i.step)}</span>{i.message}</td>
+            </tr>
+          )}
+        </For>
+      </tbody>
+    </table>
+  </>
+);
+
 const Reseed: Component = () => {
   const [clients] = createResource(fetchClients);
   const [sites] = createResource(fetchSites);
@@ -45,6 +74,11 @@ const Reseed: Component = () => {
   const [preview, setPreview] = createSignal<{ id: string; data: Preview } | null>(null);
   const [selected, setSelected] = createSignal<number[]>([]);
   const [summary, setSummary] = createSignal<ExecuteSummary | null>(null);
+  // Hard links an execution offered: each must be ticked on its own, none by default.
+  const [linkPick, setLinkPick] = createSignal<number[]>([]);
+  const [linkSummary, setLinkSummary] = createSignal<ExecuteSummary | null>(null);
+  const offers = createMemo<ItemResult[]>(() =>
+    (summary()?.items ?? []).filter((i) => i.status === 'skipped' && i.step === 'link'));
   const [error, setError] = createSignal('');
 
   const sourceClients = createMemo(() => (clients() || []).filter((c) => c.client_type === 'qbittorrent'));
@@ -101,6 +135,8 @@ const Reseed: Component = () => {
     if (!p) return;
     setError('');
     setSummary(null);
+    setLinkPick([]);
+    setLinkSummary(null);
     const risky = p.data.candidates.filter((c) => c.needs_confirmation).map((c) => c.id);
     try {
       const { task_id } = await startExecute({
@@ -111,6 +147,20 @@ const Reseed: Component = () => {
       });
       const t = await follow<ExecuteSummary>(task_id);
       if (t.result) setSummary(t.result);
+      if (t.error) setError(t.error);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const runLink = async () => {
+    const s = summary();
+    if (!s) return;
+    setError('');
+    try {
+      const { task_id } = await startLink(s.run_id, linkPick());
+      const t = await follow<ExecuteSummary>(task_id);
+      if (t.result) setLinkSummary(t.result);
       if (t.error) setError(t.error);
     } catch (e) {
       setError((e as Error).message);
@@ -310,28 +360,38 @@ const Reseed: Component = () => {
         {(s) => (
           <div class="card bg-base-100 shadow-xl">
             <div class="card-body">
-              <h2 class="card-title">
-                成功 {s().success}，跳过 {s().skipped}，失败 {s().failed}
-                <Show when={s().not_attempted}>，未执行 {s().not_attempted}</Show>
-              </h2>
-              <table class="table table-sm">
-                <tbody>
-                  <For each={s().items}>
+              <Results summary={s()} />
+              <Show when={offers().length > 0}>
+                <div class="mt-4 space-y-2 border-t border-base-300 pt-4">
+                  <h3 class="font-bold">文件名不同、可以用硬链接加入的 {offers().length} 个</h3>
+                  <p class="text-xs text-base-content/70">
+                    勾选的条目会在下载器的硬链接目录里按种子要的文件名新建硬链接，指向你已有的数据，源文件不动；
+                    之后暂停加入，由下载器校验。请逐条确认。
+                  </p>
+                  <For each={offers()}>
                     {(i) => (
-                      <tr>
-                        <td>
-                          <span class={`badge badge-sm ${i.status === 'success' ? 'badge-success' : i.status === 'failed' ? 'badge-error' : 'badge-warning'}`}>
-                            {statusLabel(i.status)}
-                          </span>
-                        </td>
-                        <td class="max-w-xs truncate">{i.source_name}</td>
-                        <td>{i.target_site}</td>
-                        <td class="text-xs"><span class="badge badge-ghost badge-sm mr-1">{stepLabel(i.step)}</span>{i.message}</td>
-                      </tr>
+                      <label class="flex gap-2 items-start cursor-pointer">
+                        <input type="checkbox" class="checkbox checkbox-sm mt-1" checked={linkPick().includes(i.candidate_id)}
+                          onChange={() => setLinkPick(toggle(linkPick(), i.candidate_id))} />
+                        <span class="text-sm">
+                          {i.source_name} → {i.target_site || '未认出的站'}
+                          <span class="block text-xs text-base-content/70">{i.message}</span>
+                        </span>
+                      </label>
                     )}
                   </For>
-                </tbody>
-              </table>
+                  <button class="btn btn-warning btn-sm" disabled={linkPick().length === 0 || running()} onClick={runLink}>
+                    硬链接加入选中的 {linkPick().length} 个
+                  </button>
+                </div>
+              </Show>
+              <Show when={linkSummary()}>
+                {(l) => (
+                  <div class="mt-4 border-t border-base-300 pt-4">
+                    <Results summary={l()} />
+                  </div>
+                )}
+              </Show>
             </div>
           </div>
         )}

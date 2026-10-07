@@ -75,6 +75,7 @@ pub fn create_router(state: AppState) -> Router {
         // Uploaded torrents arrive as base64 JSON: up to 64 MiB in one request.
         .route("/reseed/import", post(handlers::reseed::import).layer(DefaultBodyLimit::max(64 << 20)))
         .route("/reseed/execute", post(handlers::reseed::execute))
+        .route("/reseed/link", post(handlers::reseed::link))
         .route("/reseed/history", get(handlers::reseed::history))
         .route("/tasks/{id}", get(handlers::reseed::task_status))
         .route("/tasks/{id}/cancel", post(handlers::reseed::task_cancel))
