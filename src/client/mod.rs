@@ -72,6 +72,12 @@ impl std::str::FromStr for ClientType {
     }
 }
 
+impl rusqlite::types::FromSql for ClientType {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        value.as_str()?.parse().map_err(|e: String| rusqlite::types::FromSqlError::Other(e.into()))
+    }
+}
+
 /// A torrent as the downloader reports it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentInfo {
@@ -160,5 +166,18 @@ impl ClientConfig {
     pub fn base_url(&self) -> String {
         let scheme = if self.use_https { "https" } else { "http" };
         format!("{}://{}:{}", scheme, self.host, self.port)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unknown_client_type_in_the_database_is_an_error_not_qbittorrent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let read = |text: &str| conn.query_row("SELECT ?1", [text], |r| r.get::<_, ClientType>(0));
+        assert_eq!(read("transmission").unwrap(), ClientType::Transmission);
+        assert!(read("deluge").is_err());
     }
 }

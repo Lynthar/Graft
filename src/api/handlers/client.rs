@@ -45,11 +45,10 @@ pub async fn list(
 
     let clients = stmt
         .query_map([], |row| {
-            let client_type_str: String = row.get(2)?;
             Ok(ClientResponse {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                client_type: client_type_str.parse().unwrap_or(ClientType::QBittorrent),
+                client_type: row.get(2)?,
                 host: row.get(3)?,
                 port: row.get(4)?,
                 username: row.get(5)?,
@@ -72,11 +71,10 @@ pub async fn get_one(
         "SELECT id, name, client_type, host, port, username, use_https, enabled FROM clients WHERE id = ?1",
         [&id],
         |row| {
-            let client_type_str: String = row.get(2)?;
             Ok(ClientResponse {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                client_type: client_type_str.parse().unwrap_or(ClientType::QBittorrent),
+                client_type: row.get(2)?,
                 host: row.get(3)?,
                 port: row.get(4)?,
                 username: row.get(5)?,
@@ -84,9 +82,9 @@ pub async fn get_one(
                 enabled: row.get::<_, i32>(7)? != 0,
             })
         },
-    ).map_err(|_| AppError::not_found("Client not found"))?;
+    ).optional()?;
 
-    Ok(Json(client))
+    client.map(Json).ok_or_else(|| AppError::not_found("Client not found"))
 }
 
 /// Create a new client
@@ -210,17 +208,10 @@ pub(crate) fn load_client(state: &AppState, id: &str) -> Result<ClientConfig, Ap
             "SELECT id, name, client_type, host, port, username, password, use_https FROM clients WHERE id = ?1",
             [id],
             |row| {
-                let client_type: String = row.get(2)?;
                 Ok(ClientConfig {
                     id: row.get(0)?,
                     name: row.get(1)?,
-                    client_type: client_type.parse().map_err(|e: String| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            2,
-                            rusqlite::types::Type::Text,
-                            Box::new(std::io::Error::other(e)),
-                        )
-                    })?,
+                    client_type: row.get(2)?,
                     host: row.get(3)?,
                     port: row.get(4)?,
                     username: row.get(5)?,
