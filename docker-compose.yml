@@ -14,3 +14,6 @@ services:
       # Listening on all interfaces needs a password; put it in a .env file next to this one.
       - GRAFT_PASSWORD=${GRAFT_PASSWORD:?set GRAFT_PASSWORD in a .env file next to docker-compose.yml}
       - GRAFT_PORT=3000
+      # Graft runs as this user and group and owns ./data; put `id -u` and `id -g` in .env.
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}

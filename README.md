@@ -70,11 +70,15 @@ With Docker:
 git clone https://github.com/Lynthar/Graft.git
 cd Graft
 echo 'GRAFT_PASSWORD=choose-a-password' > .env
+echo "PUID=$(id -u)" >> .env
+echo "PGID=$(id -g)" >> .env
 docker compose up -d
 ```
 
 Inside the container Graft listens on all interfaces, so it needs a password;
-compose reads it from `.env` and refuses to start without one.
+compose reads it from `.env` and refuses to start without one. Graft runs as
+the user and group in `PUID` and `PGID` (1000 if unset) and hands `./data` to
+them, so the database there is yours to read and back up.
 
 By hand, with Node.js 24 and a current stable Rust:
 

@@ -36,12 +36,13 @@ RUN touch src/main.rs && cargo build --release
 # Stage 3: Final image
 FROM alpine:3.24
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata su-exec
 
 WORKDIR /app
 
 # Copy binary
 COPY --from=rust-builder /app/target/release/graft /app/graft
+COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/
 
 # Create data directory
 RUN mkdir -p /app/data
@@ -58,5 +59,6 @@ EXPOSE 3000
 # Volume for persistent data
 VOLUME ["/app/data"]
 
-# Run
+# Run as PUID:PGID, set in the environment
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["/app/graft"]
