@@ -42,7 +42,8 @@ WORKDIR /app
 
 # Copy binary
 COPY --from=rust-builder /app/target/release/graft /app/graft
-COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 # Create data directory
 RUN mkdir -p /app/data
