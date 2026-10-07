@@ -7,6 +7,7 @@ use axum::{
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
+use super::secret;
 use crate::api::{AppError, AppState};
 use crate::client::{ClientConfig, ClientType};
 
@@ -34,30 +35,33 @@ pub struct CreateClientRequest {
     pub use_https: bool,
 }
 
+const VIEW_COLUMNS: &str = "id, name, client_type, host, port, username, use_https, enabled";
+
+fn view(row: &rusqlite::Row) -> rusqlite::Result<ClientResponse> {
+    Ok(ClientResponse {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        client_type: row.get(2)?,
+        host: row.get(3)?,
+        port: row.get(4)?,
+        username: row.get(5)?,
+        use_https: row.get::<_, i32>(6)? != 0,
+        enabled: row.get::<_, i32>(7)? != 0,
+    })
+}
+
+fn load_view(conn: &rusqlite::Connection, id: &str) -> Result<ClientResponse, AppError> {
+    let sql = format!("SELECT {VIEW_COLUMNS} FROM clients WHERE id = ?1");
+    conn.query_row(&sql, [id], view).optional()?.ok_or_else(|| AppError::not_found("没有这个下载器"))
+}
+
 /// List all clients
 pub async fn list(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ClientResponse>>, AppError> {
     let conn = state.db.conn();
-    let mut stmt = conn.prepare(
-        "SELECT id, name, client_type, host, port, username, use_https, enabled FROM clients ORDER BY name"
-    )?;
-
-    let clients = stmt
-        .query_map([], |row| {
-            Ok(ClientResponse {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                client_type: row.get(2)?,
-                host: row.get(3)?,
-                port: row.get(4)?,
-                username: row.get(5)?,
-                use_https: row.get::<_, i32>(6)? != 0,
-                enabled: row.get::<_, i32>(7)? != 0,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
+    let mut stmt = conn.prepare(&format!("SELECT {VIEW_COLUMNS} FROM clients ORDER BY name"))?;
+    let clients = stmt.query_map([], view)?.collect::<Result<Vec<_>, _>>()?;
     Ok(Json(clients))
 }
 
@@ -66,25 +70,7 @@ pub async fn get_one(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ClientResponse>, AppError> {
-    let conn = state.db.conn();
-    let client = conn.query_row(
-        "SELECT id, name, client_type, host, port, username, use_https, enabled FROM clients WHERE id = ?1",
-        [&id],
-        |row| {
-            Ok(ClientResponse {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                client_type: row.get(2)?,
-                host: row.get(3)?,
-                port: row.get(4)?,
-                username: row.get(5)?,
-                use_https: row.get::<_, i32>(6)? != 0,
-                enabled: row.get::<_, i32>(7)? != 0,
-            })
-        },
-    ).optional()?;
-
-    client.map(Json).ok_or_else(|| AppError::not_found("没有这个下载器"))
+    load_view(&state.db.conn(), &id).map(Json)
 }
 
 /// Create a new client
@@ -105,7 +91,7 @@ pub async fn create(
             req.host,
             req.port,
             req.username,
-            req.password,
+            secret(req.password),
             req.use_https as i32,
         ],
     )?;
@@ -122,7 +108,7 @@ pub async fn create(
     }))
 }
 
-/// Update a client
+/// Update a client; a blank password keeps the stored one.
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -131,7 +117,8 @@ pub async fn update(
     let conn = state.db.conn();
 
     let rows = conn.execute(
-        "UPDATE clients SET name = ?1, client_type = ?2, host = ?3, port = ?4, username = ?5, password = ?6, use_https = ?7, updated_at = datetime('now')
+        "UPDATE clients SET name = ?1, client_type = ?2, host = ?3, port = ?4, username = ?5,
+             password = COALESCE(?6, password), use_https = ?7, updated_at = datetime('now')
          WHERE id = ?8",
         rusqlite::params![
             req.name,
@@ -139,7 +126,7 @@ pub async fn update(
             req.host,
             req.port,
             req.username,
-            req.password,
+            secret(req.password),
             req.use_https as i32,
             id,
         ],
@@ -148,17 +135,7 @@ pub async fn update(
     if rows == 0 {
         return Err(AppError::not_found("没有这个下载器"));
     }
-
-    Ok(Json(ClientResponse {
-        id,
-        name: req.name,
-        client_type: req.client_type,
-        host: req.host,
-        port: req.port,
-        username: req.username,
-        use_https: req.use_https,
-        enabled: true,
-    }))
+    load_view(&conn, &id).map(Json)
 }
 
 /// Delete a client
