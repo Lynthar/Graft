@@ -535,6 +535,21 @@ impl Graft {
         next
     }
 
+    /// Send SIGTERM, as `docker stop` does, and wait for the process to exit.
+    #[cfg(unix)]
+    pub async fn terminate(&mut self) -> (std::process::ExitStatus, Duration) {
+        let started = Instant::now();
+        let pid = self.child.id().to_string();
+        assert!(Command::new("kill").args(["-TERM", &pid]).status().unwrap().success());
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return (status, started.elapsed());
+            }
+            assert!(started.elapsed() < Duration::from_secs(20), "graft ignored SIGTERM");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     /// `host:port` this instance listens on.
     pub fn authority(&self) -> &str {
         self.base.trim_start_matches("http://").trim_end_matches("/api")
