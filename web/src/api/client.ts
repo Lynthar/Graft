@@ -1,5 +1,9 @@
 const API_BASE = '/api';
 
+/** Go to the login page, coming back here afterwards. */
+export const toLogin = () =>
+  location.assign(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+
 async function request<T>(
   path: string,
   options: RequestInit = {}
@@ -14,7 +18,7 @@ async function request<T>(
 
   // The login request itself answers 401 to a wrong password; everything else means log in first.
   if (response.status === 401 && path !== '/login') {
-    location.assign(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+    toLogin();
   }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));

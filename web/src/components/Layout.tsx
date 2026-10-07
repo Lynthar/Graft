@@ -1,6 +1,7 @@
-import { Component, createResource, JSX, Show, Suspense } from 'solid-js';
+import { Component, createEffect, createResource, JSX, Show, Suspense } from 'solid-js';
 import { A } from '@solidjs/router';
 import { fetchAuth, logout } from '../api/auth';
+import { toLogin } from '../api/client';
 
 interface LayoutProps {
   children?: JSX.Element;
@@ -8,6 +9,9 @@ interface LayoutProps {
 
 const Layout: Component<LayoutProps> = (props) => {
   const [auth] = createResource(fetchAuth);
+  // Pages wait for this check, so a logged-out visit goes straight to the login page.
+  const loggedOut = () => auth()?.required === true && !auth()?.authenticated;
+  createEffect(() => loggedOut() && toLogin());
   const signOut = async () => {
     await logout();
     location.assign('/login');
@@ -72,9 +76,11 @@ const Layout: Component<LayoutProps> = (props) => {
 
       {/* Main Content */}
       <main class="main-content">
-        <Suspense fallback={<div class="loading loading-spinner loading-lg"></div>}>
-          {props.children}
-        </Suspense>
+        <Show when={!auth.loading && !loggedOut()}>
+          <Suspense fallback={<div class="loading loading-spinner loading-lg"></div>}>
+            {props.children}
+          </Suspense>
+        </Show>
       </main>
     </div>
   );
