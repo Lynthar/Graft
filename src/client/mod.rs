@@ -32,6 +32,9 @@ pub enum ClientError {
 
     #[error("The client already has this torrent")]
     Duplicate,
+
+    #[error("Labels not set: {0}")]
+    LabelsNotSet(String),
 }
 
 impl From<reqwest::Error> for ClientError {
@@ -136,7 +139,8 @@ pub trait BitTorrentClient: Send + Sync {
     ///
     /// # Errors
     /// `Duplicate` when the client reports it already has the torrent. Success only
-    /// means the request was accepted; confirm with [`Self::has_torrent`].
+    /// means the request was accepted, and any other error may still have left the
+    /// torrent added (`LabelsNotSet` always does); confirm with [`Self::has_torrent`].
     async fn add_torrent(&self, torrent_bytes: &[u8], options: AddTorrentOptions) -> Result<()>;
 }
 

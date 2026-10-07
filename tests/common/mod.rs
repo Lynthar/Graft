@@ -260,6 +260,12 @@ pub struct TrState {
     pub adds: Vec<Value>,
     /// Info hash for each `.torrent` the mock may be handed.
     pub known: HashMap<Vec<u8>, String>,
+    /// Labels per info hash, as `torrent-set` left them.
+    pub labels: HashMap<String, Value>,
+    /// Torrents the user adds, labelled `mine`, just before Graft's `torrent-add` lands.
+    pub racing: HashSet<String>,
+    /// `torrent-set` answers with an error.
+    pub fail_set: bool,
 }
 
 #[derive(Clone, Default)]
@@ -274,12 +280,17 @@ impl Transmission {
         self.0.lock().unwrap().adds.clone()
     }
 
+    pub fn labels(&self, hash: &str) -> Option<Value> {
+        self.0.lock().unwrap().labels.get(hash).cloned()
+    }
+
     pub async fn start(&self) -> SocketAddr {
         serve(Router::new().route("/transmission/rpc", post(tr_rpc)).with_state(self.clone())).await
     }
 }
 
 /// The pre-4.1 RPC protocol: a request without the session id gets a 409 that hands it out.
+/// Like 3.x, `torrent-add` ignores `labels`; only `torrent-set` applies them.
 async fn tr_rpc(State(tr): State<Transmission>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
     if headers.get("X-Transmission-Session-Id").and_then(|v| v.to_str().ok()) != Some(TR_SESSION) {
         return (StatusCode::CONFLICT, [("X-Transmission-Session-Id", TR_SESSION)]).into_response();
@@ -293,6 +304,10 @@ async fn tr_rpc(State(tr): State<Transmission>, headers: HeaderMap, Json(body): 
             let Some(hash) = s.known.get(&bytes).cloned() else {
                 return Json(json!({"result": "invalid or corrupt torrent file"})).into_response();
             };
+            if s.racing.remove(&hash) {
+                s.torrents.insert(hash.clone());
+                s.labels.insert(hash.clone(), json!(["mine"]));
+            }
             let key = if s.torrents.insert(hash.clone()) { "torrent-added" } else { "torrent-duplicate" };
             json!({key: {"id": 1, "name": "x", "hashString": hash}})
         }
@@ -300,6 +315,15 @@ async fn tr_rpc(State(tr): State<Transmission>, headers: HeaderMap, Json(body): 
             let ids: Vec<&str> = args["ids"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
             let found: Vec<Value> = ids.iter().filter(|h| s.torrents.contains(**h)).map(|h| json!({"hashString": h})).collect();
             json!({"torrents": found})
+        }
+        Some("torrent-set") if s.fail_set => return Json(json!({"result": "labels failed"})).into_response(),
+        Some("torrent-set") => {
+            for id in args["ids"].as_array().unwrap().iter().filter_map(Value::as_str) {
+                if s.torrents.contains(id) {
+                    s.labels.insert(id.to_string(), args["labels"].clone());
+                }
+            }
+            json!({})
         }
         _ => return Json(json!({"result": "method name not recognized"})).into_response(),
     };
