@@ -9,6 +9,7 @@ export interface Client {
   username?: string;
   use_https: boolean;
   enabled: boolean;
+  link_dir?: string;
 }
 
 export interface CreateClientRequest {
@@ -19,6 +20,7 @@ export interface CreateClientRequest {
   username?: string;
   password?: string;
   use_https: boolean;
+  link_dir?: string;
 }
 
 export const fetchClients = () => api.get<Client[]>('/clients');

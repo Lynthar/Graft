@@ -507,6 +507,18 @@ async fn uploads_that_are_seeded_partial_unknown_or_broken_are_reported_not_offe
 }
 
 #[tokio::test]
+async fn a_hard_link_directory_must_be_absolute_and_blank_clears_it() {
+    let graft = Graft::start().await;
+    let client = |dir: &str| json!({"name": "qb", "client_type": "qbittorrent", "host": "127.0.0.1", "port": 1, "link_dir": dir});
+    assert_eq!(graft.post("/clients", client("links")).await.0, StatusCode::BAD_REQUEST);
+    let (status, created) = graft.post("/clients", client("/data/links")).await;
+    assert_eq!((status, &created["link_dir"]), (StatusCode::OK, &json!("/data/links")), "{created}");
+    let path = format!("/clients/{}", created["id"].as_str().unwrap());
+    let (_, updated) = graft.call(reqwest::Method::PUT, &path, Some(client(" "))).await;
+    assert_eq!(updated["link_dir"], Value::Null, "{updated}");
+}
+
+#[tokio::test]
 async fn failed_downloads_still_wait_for_the_site_rate_limit() {
     let contents = [movie(), Content::new("show", "Show.S01", &[("e01.mkv", 500)])];
     let s = setup(&contents, json!({"rate_limit_rpm": 60})).await;

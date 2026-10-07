@@ -155,6 +155,8 @@ pub struct ClientConfig {
     pub username: Option<String>,
     pub password: Option<String>,
     pub use_https: bool,
+    /// Absolute path, as this client and Graft both see it, where hard links go.
+    pub link_dir: Option<String>,
 }
 
 impl ClientConfig {

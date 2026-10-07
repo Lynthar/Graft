@@ -15,8 +15,8 @@ use serde_json::json;
 
 use super::WebAssets;
 
-/// A credential as submitted: blank means none was given.
-pub(crate) fn secret(value: Option<String>) -> Option<String> {
+/// A submitted text field: blank means none was given.
+pub(crate) fn non_blank(value: Option<String>) -> Option<String> {
     value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 

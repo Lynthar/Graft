@@ -8,7 +8,7 @@ use axum::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 
-use super::secret;
+use super::non_blank;
 use crate::api::{AppError, AppState};
 use crate::site::{self, SiteView, TemplateType};
 
@@ -105,9 +105,9 @@ pub async fn create(
             base_url,
             req.template_type.to_string(),
             pattern,
-            secret(req.passkey),
-            secret(req.cookie),
-            secret(req.authkey),
+            non_blank(req.passkey),
+            non_blank(req.cookie),
+            non_blank(req.authkey),
             req.enabled,
             rpm,
             daily
@@ -145,7 +145,7 @@ pub async fn update(
     let rpm = validate_rpm(req.rate_limit_rpm.unwrap_or(current.rate_limit_rpm))?;
     let daily = validate_daily(req.daily_limit.unwrap_or(current.daily_limit))?;
     let keep = |new: Option<String>, old: Option<String>| match new {
-        Some(v) => secret(Some(v)),
+        Some(v) => non_blank(Some(v)),
         None => old,
     };
 
