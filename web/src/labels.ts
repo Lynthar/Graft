@@ -14,5 +14,17 @@ const STEP: Record<string, string> = {
   added: '已加入',
 };
 
+const EVIDENCE: Record<string, string> = { pieces_equal: 'pieces 完全相同', files_equal: '文件一致、pieces 不同' };
+
+const IMPORT_OUTCOME: Record<string, string> = {
+  candidate: '可加入',
+  seeding: '已在做种',
+  partial: '部分匹配',
+  none: '没对上',
+  invalid: '文件有误',
+};
+
 export const statusLabel = (code: string) => STATUS[code] ?? code;
+export const evidenceLabel = (code: string) => EVIDENCE[code] ?? code;
+export const importOutcomeLabel = (code: string) => IMPORT_OUTCOME[code] ?? code;
 export const stepLabel = (code: string) => STEP[code] ?? code;

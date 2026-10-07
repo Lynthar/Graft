@@ -1,4 +1,4 @@
-//! Parsing of `.torrent` files received from sites (untrusted input).
+//! Parsing of `.torrent` files from sites or uploaded by the user (untrusted input).
 
 /// Largest `.torrent` accepted from a site.
 pub const MAX_TORRENT_BYTES: usize = 10 * 1024 * 1024;
@@ -13,8 +13,12 @@ pub struct Metainfo {
     pub info_hash: String,
     /// SHA-1 of `info.pieces`, lowercase hex; the value NexusPHP indexes.
     pub pieces_hash: String,
+    /// `info.name`: the single file, or the folder the files land in.
+    pub name: String,
     /// Files as they land under the save path: `name/...` for multi-file torrents.
     pub files: Vec<(String, u64)>,
+    /// Host of the announce URL; the URL itself carries the passkey and is not kept.
+    pub tracker_host: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -57,12 +61,15 @@ pub fn parse(bytes: &[u8]) -> Result<Metainfo, MetainfoError> {
         return Err(Malformed("不是 bencode 字典"));
     }
     let mut info = None;
+    let mut announce = None;
     let mut pos = 1;
     while *bytes.get(pos).ok_or(Malformed("数据被截断"))? != b'e' {
         let (key, key_end) = decode(bytes, pos, 1).ok_or(Malformed("键无法解析"))?;
         let (value, end) = decode(bytes, key_end, 1).ok_or(Malformed("值无法解析"))?;
-        if matches!(key, Value::Bytes(b"info")) {
-            info = Some((value, key_end..end));
+        match key {
+            Value::Bytes(b"info") => info = Some((value, key_end..end)),
+            Value::Bytes(b"announce") => announce = Some(value),
+            _ => {}
         }
         pos = end;
     }
@@ -77,7 +84,7 @@ pub fn parse(bytes: &[u8]) -> Result<Metainfo, MetainfoError> {
     };
     let name = text(info.get("name.utf-8").or_else(|| info.get("name")))?;
     let files = match info.get("files") {
-        None => vec![(name, length(info.get("length"))?)],
+        None => vec![(name.clone(), length(info.get("length"))?)],
         Some(Value::List(entries)) => entries
             .iter()
             .map(|f| {
@@ -96,7 +103,14 @@ pub fn parse(bytes: &[u8]) -> Result<Metainfo, MetainfoError> {
         Some(_) => return Err(Malformed("files 不是列表")),
     };
 
-    Ok(Metainfo { info_hash: sha1_hex(&bytes[span]), pieces_hash: sha1_hex(pieces), files })
+    let tracker_host = match announce {
+        Some(Value::Bytes(url)) => std::str::from_utf8(url)
+            .ok()
+            .and_then(|u| url::Url::parse(u).ok())
+            .and_then(|u| u.host_str().map(str::to_ascii_lowercase)),
+        _ => None,
+    };
+    Ok(Metainfo { info_hash: sha1_hex(&bytes[span]), pieces_hash: sha1_hex(pieces), name, files, tracker_host })
 }
 
 pub fn sha1_hex(bytes: &[u8]) -> String {
@@ -200,6 +214,16 @@ pub mod tests {
     fn single_file_layout_is_the_name_itself() {
         let bytes = torrent_bytes("movie.mkv", &[("", 99)], &[1u8; 20], "");
         assert_eq!(parse(&bytes).unwrap().files, vec![("movie.mkv".into(), 99)]);
+    }
+
+    #[test]
+    fn only_the_host_of_the_announce_url_is_kept() {
+        let announce = "https://Tracker.Example.org/announce.php?passkey=SECRET";
+        let plain = String::from_utf8(torrent_bytes("x", &[("", 1)], &[1u8; 20], "")).unwrap();
+        let bytes = plain.replacen("d8:announce3:x:y", &format!("d8:announce{}:{announce}", announce.len()), 1);
+        let meta = parse(bytes.as_bytes()).unwrap();
+        assert_eq!(meta.tracker_host.as_deref(), Some("tracker.example.org"));
+        assert!(!format!("{meta:?}").contains("SECRET"));
     }
 
     #[test]

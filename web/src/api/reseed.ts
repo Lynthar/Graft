@@ -30,7 +30,15 @@ export interface Preview {
     without_pieces: Reason[];
   };
   sites: { site_id: string; queried: number; found: number; already_seeding: number; error?: string }[];
+  imports: ImportReport[];
   candidates: Candidate[];
+}
+
+export interface ImportReport {
+  file: string;
+  site?: string;
+  outcome: 'candidate' | 'seeding' | 'partial' | 'none' | 'invalid';
+  detail: string;
 }
 
 export interface ItemResult {
@@ -76,6 +84,10 @@ export interface HistoryEntry {
 
 export const startPreview = (source_client_id: string, target_site_ids: string[]) =>
   api.post<{ task_id: string }>('/reseed/preview', { source_client_id, target_site_ids });
+
+/** `files` carry each `.torrent` base64-encoded. */
+export const startImport = (source_client_id: string, files: { name: string; data: string }[]) =>
+  api.post<{ task_id: string }>('/reseed/import', { source_client_id, files });
 
 export const startExecute = (data: {
   preview_id: string;

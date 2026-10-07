@@ -32,8 +32,8 @@ const History: Component = () => {
                     )}
                   </td>
                   <td>
-                    <span class="badge badge-outline badge-sm">{entry.target_site}</span>
-                    <span class="text-xs ml-1">#{entry.target_torrent_id}</span>
+                    <span class="badge badge-outline badge-sm">{entry.target_site || '未认出的站'}</span>
+                    <span class="text-xs ml-1">{entry.target_torrent_id ? `#${entry.target_torrent_id}` : '上传'}</span>
                   </td>
                   <td>
                     <span class={`badge ${

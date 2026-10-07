@@ -7,11 +7,12 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::api::handlers::client::load_client;
 use crate::api::{AppError, AppState};
-use crate::client::ClientType;
+use crate::client::{ClientConfig, ClientType};
 use crate::service::tasks::Snapshot;
 use crate::service::ExecuteRun;
 use crate::site;
@@ -21,6 +22,21 @@ use crate::site;
 pub struct PreviewRequest {
     pub source_client_id: String,
     pub target_site_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportRequest {
+    pub source_client_id: String,
+    pub files: Vec<UploadedTorrent>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UploadedTorrent {
+    pub name: String,
+    /// The file's bytes, base64.
+    pub data: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,16 +56,19 @@ pub struct Started {
     pub task_id: String,
 }
 
+fn load_source(state: &AppState, id: &str) -> Result<ClientConfig, AppError> {
+    let source = load_client(state, id)?;
+    if source.client_type != ClientType::QBittorrent {
+        return Err(AppError::bad_request("只有 qBittorrent 能作来源：Transmission 不提供 piece 哈希"));
+    }
+    Ok(source)
+}
+
 pub async fn preview(
     State(state): State<AppState>,
     Json(req): Json<PreviewRequest>,
 ) -> Result<Json<Started>, AppError> {
-    let source = load_client(&state, &req.source_client_id)?;
-    if source.client_type != ClientType::QBittorrent {
-        return Err(AppError::bad_request(
-            "只有 qBittorrent 能作来源：Transmission 不提供 piece 哈希",
-        ));
-    }
+    let source = load_source(&state, &req.source_client_id)?;
     if req.target_site_ids.is_empty() {
         return Err(AppError::bad_request("至少选一个目标站点"));
     }
@@ -68,6 +87,33 @@ pub async fn preview(
     let service = state.reseed.clone();
     let task = state.tasks.spawn("preview", move |task| async move {
         let preview = service.preview(&task, source, targets).await?;
+        service.keep_preview(&task.id, preview.clone());
+        Ok(preview)
+    });
+    Ok(Json(Started { task_id: task.id.clone() }))
+}
+
+/// Match uploaded `.torrent` files against the source client; the result is a preview.
+pub async fn import(
+    State(state): State<AppState>,
+    Json(req): Json<ImportRequest>,
+) -> Result<Json<Started>, AppError> {
+    let source = load_source(&state, &req.source_client_id)?;
+    if req.files.is_empty() {
+        return Err(AppError::bad_request("至少选一个种子文件"));
+    }
+    let files = req
+        .files
+        .into_iter()
+        .map(|f| match base64::engine::general_purpose::STANDARD.decode(&f.data) {
+            Ok(bytes) => Ok((f.name, bytes)),
+            Err(_) => Err(AppError::bad_request(format!("{} 的内容没能读出来", f.name))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let service = state.reseed.clone();
+    let task = state.tasks.spawn("preview", move |task| async move {
+        let preview = service.import(&task, source, files).await?;
         service.keep_preview(&task.id, preview.clone());
         Ok(preview)
     });
