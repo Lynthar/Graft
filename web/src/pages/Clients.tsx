@@ -11,7 +11,7 @@ import {
 
 type ClientType = CreateClientRequest['client_type'];
 
-const emptyForm = (): CreateClientRequest & { username: string; password: string } => ({
+const emptyForm = (): CreateClientRequest & { username: string; password: string; link_dir: string } => ({
   name: '',
   client_type: 'qbittorrent',
   host: '',
@@ -19,6 +19,7 @@ const emptyForm = (): CreateClientRequest & { username: string; password: string
   username: '',
   password: '',
   use_https: false,
+  link_dir: '',
 });
 
 type FormState = ReturnType<typeof emptyForm>;
@@ -51,6 +52,7 @@ const Clients: Component = () => {
       port: client.port,
       username: client.username ?? '',
       use_https: client.use_https,
+      link_dir: client.link_dir ?? '',
     });
     setError('');
     setEditing(client);
@@ -215,6 +217,16 @@ const Clients: Component = () => {
                 <input type="checkbox" class="checkbox" checked={form().use_https}
                   onChange={(e) => set('use_https', e.currentTarget.checked)} />
                 <span class="label-text">使用 HTTPS</span>
+              </label>
+
+              <label class="form-control">
+                <span class="label-text">硬链接目录（可选）</span>
+                <input class="input input-bordered font-mono text-sm" value={form().link_dir}
+                  placeholder="/downloads/graft-links" onInput={(e) => set('link_dir', e.currentTarget.value)} />
+                <span class="label-text-alt mt-1">
+                  文件名不同的种子在这里建硬链接。写下载器里看到的路径；Graft 要能按同一路径访问到数据，
+                  且这个目录必须和数据在同一个文件系统（ZFS 数据集）。别放进媒体库目录，以免被当成重复影片。
+                </span>
               </label>
 
               <p class="text-xs text-base-content/70">

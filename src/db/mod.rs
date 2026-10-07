@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex};
 
 /// Index `i` takes the schema from version `i` to `i + 1` (`PRAGMA user_version`).
 /// Once a release has shipped, only append: a stamped database must match its version.
-const MIGRATIONS: &[&str] = &[include_str!("../../migrations/001_initial.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../../migrations/001_initial.sql"),
+    include_str!("../../migrations/002_link_dir.sql"),
+];
 
 /// Database wrapper with connection pooling
 #[derive(Clone)]
@@ -165,6 +168,24 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_database_from_an_older_build_is_upgraded_keeping_its_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute(
+            "INSERT INTO clients (id, name, client_type, host, port, password)
+             VALUES ('c', 'qb', 'qbittorrent', 'localhost', 8080, 'pw')",
+            [],
+        )
+        .unwrap();
+        run_migrations(&mut conn).unwrap();
+        assert_eq!(version(&conn), MIGRATIONS.len() as i64);
+        let kept: (String, Option<String>) =
+            conn.query_row("SELECT password, link_dir FROM clients WHERE id = 'c'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(kept, ("pw".to_string(), None));
     }
 
     #[test]

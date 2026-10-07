@@ -7,7 +7,7 @@ use axum::{
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use super::secret;
+use super::non_blank;
 use crate::api::{AppError, AppState};
 use crate::client::{ClientConfig, ClientType};
 
@@ -21,6 +21,7 @@ pub struct ClientResponse {
     pub username: Option<String>,
     pub use_https: bool,
     pub enabled: bool,
+    pub link_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,9 +34,11 @@ pub struct CreateClientRequest {
     pub password: Option<String>,
     #[serde(default)]
     pub use_https: bool,
+    #[serde(default)]
+    pub link_dir: Option<String>,
 }
 
-const VIEW_COLUMNS: &str = "id, name, client_type, host, port, username, use_https, enabled";
+const VIEW_COLUMNS: &str = "id, name, client_type, host, port, username, use_https, enabled, link_dir";
 
 fn view(row: &rusqlite::Row) -> rusqlite::Result<ClientResponse> {
     Ok(ClientResponse {
@@ -47,7 +50,17 @@ fn view(row: &rusqlite::Row) -> rusqlite::Result<ClientResponse> {
         username: row.get(5)?,
         use_https: row.get::<_, i32>(6)? != 0,
         enabled: row.get::<_, i32>(7)? != 0,
+        link_dir: row.get(8)?,
     })
+}
+
+/// Blank clears the directory; anything else must be an absolute path.
+fn link_dir(value: Option<String>) -> Result<Option<String>, AppError> {
+    let dir = non_blank(value);
+    if dir.as_deref().is_some_and(|d| !std::path::Path::new(d).is_absolute()) {
+        return Err(AppError::bad_request("硬链接目录要写绝对路径，比如 /downloads/graft-links"));
+    }
+    Ok(dir)
 }
 
 fn load_view(conn: &rusqlite::Connection, id: &str) -> Result<ClientResponse, AppError> {
@@ -79,11 +92,11 @@ pub async fn create(
     Json(req): Json<CreateClientRequest>,
 ) -> Result<Json<ClientResponse>, AppError> {
     let id = uuid::Uuid::new_v4().to_string();
-
+    let link_dir = link_dir(req.link_dir)?;
     let conn = state.db.conn();
     conn.execute(
-        "INSERT INTO clients (id, name, client_type, host, port, username, password, use_https, enabled)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+        "INSERT INTO clients (id, name, client_type, host, port, username, password, use_https, link_dir, enabled)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)",
         rusqlite::params![
             id,
             req.name,
@@ -91,43 +104,36 @@ pub async fn create(
             req.host,
             req.port,
             req.username,
-            secret(req.password),
+            non_blank(req.password),
             req.use_https as i32,
+            link_dir,
         ],
     )?;
-
-    Ok(Json(ClientResponse {
-        id,
-        name: req.name,
-        client_type: req.client_type,
-        host: req.host,
-        port: req.port,
-        username: req.username,
-        use_https: req.use_https,
-        enabled: true,
-    }))
+    load_view(&conn, &id).map(Json)
 }
 
-/// Update a client; a blank password keeps the stored one.
+/// Update a client. A blank password keeps the stored one, since it is never sent back
+/// to be edited; a blank hard-link directory clears it, since it is shown and editable.
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<CreateClientRequest>,
 ) -> Result<Json<ClientResponse>, AppError> {
+    let link_dir = link_dir(req.link_dir)?;
     let conn = state.db.conn();
-
     let rows = conn.execute(
         "UPDATE clients SET name = ?1, client_type = ?2, host = ?3, port = ?4, username = ?5,
-             password = COALESCE(?6, password), use_https = ?7, updated_at = datetime('now')
-         WHERE id = ?8",
+             password = COALESCE(?6, password), use_https = ?7, link_dir = ?8, updated_at = datetime('now')
+         WHERE id = ?9",
         rusqlite::params![
             req.name,
             req.client_type.to_string(),
             req.host,
             req.port,
             req.username,
-            secret(req.password),
+            non_blank(req.password),
             req.use_https as i32,
+            link_dir,
             id,
         ],
     )?;
@@ -182,7 +188,7 @@ pub(crate) fn load_client(state: &AppState, id: &str) -> Result<ClientConfig, Ap
     let conn = state.db.conn();
     let client = conn
         .query_row(
-            "SELECT id, name, client_type, host, port, username, password, use_https FROM clients WHERE id = ?1",
+            "SELECT id, name, client_type, host, port, username, password, use_https, link_dir FROM clients WHERE id = ?1",
             [id],
             |row| {
                 Ok(ClientConfig {
@@ -194,6 +200,7 @@ pub(crate) fn load_client(state: &AppState, id: &str) -> Result<ClientConfig, Ap
                     username: row.get(5)?,
                     password: row.get(6)?,
                     use_https: row.get::<_, i32>(7)? != 0,
+                    link_dir: row.get(8)?,
                 })
             },
         )
