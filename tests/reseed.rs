@@ -511,6 +511,9 @@ async fn a_hard_link_directory_must_be_absolute_and_blank_clears_it() {
     let graft = Graft::start().await;
     let client = |dir: &str| json!({"name": "qb", "client_type": "qbittorrent", "host": "127.0.0.1", "port": 1, "link_dir": dir});
     assert_eq!(graft.post("/clients", client("links")).await.0, StatusCode::BAD_REQUEST);
+    let mut bad_map = client("/data/links");
+    bad_map["path_map"] = json!([{"client": "/hdd_pool", "graft": "film"}]);
+    assert_eq!(graft.post("/clients", bad_map).await.0, StatusCode::BAD_REQUEST);
     let (status, created) = graft.post("/clients", client("/data/links")).await;
     assert_eq!((status, &created["link_dir"]), (StatusCode::OK, &json!("/data/links")), "{created}");
     let path = format!("/clients/{}", created["id"].as_str().unwrap());
@@ -518,10 +521,20 @@ async fn a_hard_link_directory_must_be_absolute_and_blank_clears_it() {
     assert_eq!(updated["link_dir"], Value::Null, "{updated}");
 }
 
-/// Movie.2024 on disk under `<dir>/src`, seeded from site A; site B carries the same pieces
-/// as `renamed`. With `link`, the client links into `<dir>/links`.
 #[cfg(unix)]
-async fn renamed_on_b(renamed: Content, link: bool) -> (Setup, TempDir) {
+#[derive(PartialEq)]
+enum Linking {
+    Off,
+    /// The client and Graft see the files at the same paths.
+    SamePaths,
+    /// The client sees `<dir>` as `/qb`, and the client's path map says so.
+    Mapped,
+}
+
+/// Movie.2024 on disk under `<dir>/src`, seeded from site A; site B carries the same pieces
+/// as `renamed`. Unless `Off`, the client links into `<dir>/links`.
+#[cfg(unix)]
+async fn renamed_on_b(renamed: Content, linking: Linking) -> (Setup, TempDir) {
     let dir = temp_dir();
     let content = movie();
     for (path, len) in content.on_disk() {
@@ -530,14 +543,19 @@ async fn renamed_on_b(renamed: Content, link: bool) -> (Setup, TempDir) {
         std::fs::write(&file, vec![7u8; len as usize]).unwrap();
     }
     let qb = Qb::default();
-    qb.seed(&content, "A", "tracker.a.test", dir.join("src").to_str().unwrap());
+    let seen = if linking == Linking::Mapped { std::path::PathBuf::from("/qb") } else { dir.clone() };
+    qb.seed(&content, "A", "tracker.a.test", seen.join("src").to_str().unwrap());
     let qb_addr = qb.start().await;
     let site_b = MockSite::new(Lookup::Open);
     let b_addr = site_b.start().await;
     let (bytes, hash) = site_b.publish(&renamed, "77", "B");
     qb.expect_add(&bytes, &hash);
     let graft = Graft::start().await;
-    let extra = if link { json!({"link_dir": dir.join("links")}) } else { json!({}) };
+    let extra = match linking {
+        Linking::Off => json!({}),
+        Linking::SamePaths => json!({"link_dir": dir.join("links")}),
+        Linking::Mapped => json!({"link_dir": "/qb/links", "path_map": [{"client": "/qb", "graft": dir}]}),
+    };
     let client = graft.add_qb_with(qb_addr, extra).await;
     graft.add_site("a", "a.test", None, json!({})).await;
     graft.add_site("b", "b.test", Some(b_addr), json!({})).await;
@@ -563,7 +581,7 @@ async fn offer_links(s: &Setup) -> Value {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_renamed_torrent_is_hard_linked_only_once_confirmed() {
-    let (s, tmp) = renamed_on_b(other_name(), true).await;
+    let (s, tmp) = renamed_on_b(other_name(), Linking::SamePaths).await;
     let dir = &tmp.0;
     let done = offer_links(&s).await;
     let item = &done["result"]["items"][0];
@@ -586,8 +604,24 @@ async fn a_renamed_torrent_is_hard_linked_only_once_confirmed() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn links_follow_the_path_map_when_the_client_sees_other_paths() {
+    let (s, tmp) = renamed_on_b(other_name(), Linking::Mapped).await;
+    let dir = &tmp.0;
+    let done = offer_links(&s).await;
+    assert_eq!(done["result"]["items"][0]["step"], "link", "{done}");
+    let run_id = done["result"]["run_id"].as_str().unwrap();
+    let (_, started) = s.graft.post("/reseed/link", json!({"run_id": run_id, "candidate_ids": [0]})).await;
+    let linked = s.graft.wait_task(&started).await;
+    assert_eq!(linked["result"]["success"], 1, "{linked}");
+    let link = dir.join("links/b/Movie.2024.Other/movie.mkv");
+    assert_eq!(inode(&dir.join("src/Movie.2024/movie.mkv")), inode(&link));
+    assert_eq!(s.qb.0.lock().unwrap().adds[0]["savepath"], "/qb/links/b", "the client is told its own path");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn without_a_hard_link_directory_the_skip_says_where_to_set_one() {
-    let (s, _dir) = renamed_on_b(other_name(), false).await;
+    let (s, _dir) = renamed_on_b(other_name(), Linking::Off).await;
     let done = offer_links(&s).await;
     let item = &done["result"]["items"][0];
     assert_eq!(item["step"], "layout", "{done}");
@@ -599,7 +633,7 @@ async fn without_a_hard_link_directory_the_skip_says_where_to_set_one() {
 async fn a_torrent_path_that_climbs_out_of_the_link_directory_is_never_offered() {
     let mut climbing = other_name();
     climbing.files[0].0 = "../escape.mkv".into();
-    let (s, tmp) = renamed_on_b(climbing, true).await;
+    let (s, tmp) = renamed_on_b(climbing, Linking::SamePaths).await;
     let dir = &tmp.0;
     let done = offer_links(&s).await;
     let item = &done["result"]["items"][0];
@@ -611,7 +645,7 @@ async fn a_torrent_path_that_climbs_out_of_the_link_directory_is_never_offered()
 #[cfg(unix)]
 #[tokio::test]
 async fn another_file_in_the_way_fails_the_link_and_leaves_nothing_behind() {
-    let (s, tmp) = renamed_on_b(other_name(), true).await;
+    let (s, tmp) = renamed_on_b(other_name(), Linking::SamePaths).await;
     let dir = &tmp.0;
     let done = offer_links(&s).await;
     let in_the_way = dir.join("links/b/Movie.2024.Other/movie.nfo");

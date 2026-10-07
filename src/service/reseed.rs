@@ -11,7 +11,7 @@ use anyhow::{bail, Context};
 use serde::Serialize;
 use tracing::{info, warn};
 
-use crate::client::{AddTorrentOptions, BitTorrentClient, ClientConfig, ClientError, TorrentInfo};
+use crate::client::{graft_path, AddTorrentOptions, BitTorrentClient, ClientConfig, ClientError, PathMapping, TorrentInfo};
 use crate::db::Database;
 use crate::service::tasks::Task;
 use crate::site::gate::RateGates;
@@ -176,6 +176,7 @@ struct RunContext<'a> {
     target: &'a dyn BitTorrentClient,
     target_id: &'a str,
     link_dir: Option<&'a str>,
+    path_map: &'a [PathMapping],
     added: HashSet<String>,
     links: HashMap<usize, LinkPlan>,
 }
@@ -546,6 +547,7 @@ impl ReseedService {
             target: target_client.as_ref(),
             target_id: &target.id,
             link_dir: target.link_dir.as_deref(),
+            path_map: &target.path_map,
             added: HashSet::new(),
             links: HashMap::new(),
         };
@@ -744,7 +746,7 @@ impl ReseedService {
         on_disk.sort();
         wanted.sort();
         if wanted != on_disk {
-            return with_hash(match plan_links(candidate, &meta, &local, ctx.link_dir) {
+            return with_hash(match plan_links(candidate, &meta, &local, ctx.link_dir, ctx.path_map) {
                 Err(why) => Outcome::new("skipped", "layout", why),
                 Ok(plan) => {
                     let (have, want) = (&local[0].0, &meta.files[0].0);
@@ -828,12 +830,14 @@ async fn link_and_add(target: &dyn BitTorrentClient, plan: &LinkPlan) -> Outcome
 }
 
 /// Pair each file of the torrent with the local file holding the same bytes, as a link
-/// under `<link_dir>/<site>`. Returns that directory and the (local file, link) pairs.
+/// under `<link_dir>/<site>`. Returns that directory as the client sees it (the save path
+/// to add with) and the (local file, link) pairs as Graft sees them, through `path_map`.
 fn plan_links(
     candidate: &Candidate,
     meta: &torrent::Metainfo,
     local: &[(String, u64)],
     link_dir: Option<&str>,
+    path_map: &[PathMapping],
 ) -> Result<(PathBuf, Vec<(PathBuf, PathBuf)>), String> {
     let same_split = local.len() == meta.files.len() && local.iter().zip(&meta.files).all(|(a, b)| a.1 == b.1);
     if !same_split {
@@ -854,12 +858,13 @@ fn plan_links(
     if local_root.is_some_and(|top| root.starts_with(&top)) {
         return Err(format!("硬链接目录 {} 落在本地种子自己的目录里，换一个目录", root.display()));
     }
+    let (source_here, root_here) = (graft_path(path_map, &candidate.save_path), graft_path(path_map, &root.to_string_lossy()));
     let links = local
         .iter()
         .zip(&meta.files)
         .map(|((have, _), (want, _))| {
             let rel = safe_relative(want).ok_or_else(|| format!("种子里的路径不安全，不建链接：{want:?}"))?;
-            Ok((save_path.join(have), root.join(rel)))
+            Ok((source_here.join(have), root_here.join(rel)))
         })
         .collect::<Result<_, String>>()?;
     Ok((root, links))
@@ -898,7 +903,7 @@ fn remove_links(created: &[PathBuf]) {
 fn link_file(src: &Path, dst: &Path, created: &mut Vec<PathBuf>) -> Result<(), String> {
     let source = std::fs::metadata(src).map_err(|e| match e.kind() {
         ErrorKind::NotFound => {
-            format!("Graft 看不到源文件 {}：容器要按下载器看到的同一路径挂载数据", src.display())
+            format!("Graft 看不到源文件 {}：检查容器的挂载，以及下载器设置里的路径映射", src.display())
         }
         _ => format!("读不了源文件 {}：{e}", src.display()),
     })?;
@@ -913,7 +918,11 @@ fn link_file(src: &Path, dst: &Path, created: &mut Vec<PathBuf>) -> Result<(), S
     }
     std::fs::hard_link(src, dst).map_err(|e| match e.kind() {
         ErrorKind::CrossesDevices => {
-            format!("硬链接目录与 {} 不在同一个文件系统（ZFS 数据集），链不过去", src.display())
+            format!(
+                "硬链接目录与 {} 不在同一个文件系统（ZFS 数据集），或在容器里不是同一个挂载点：\
+                 硬链接不能跨挂载点，要把数据与硬链接目录放在 Graft 的同一个挂载里",
+                src.display()
+            )
         }
         ErrorKind::PermissionDenied => format!(
             "没有权限给 {} 建硬链接：Linux 只允许给自己拥有、或自己能读写的文件建硬链接，\

@@ -7,11 +7,20 @@ import {
   deleteClient,
   type Client,
   type CreateClientRequest,
+  type PathMapping,
 } from '../api/clients';
 
 type ClientType = CreateClientRequest['client_type'];
 
-const emptyForm = (): CreateClientRequest & { username: string; password: string; link_dir: string } => ({
+// Path mappings are edited as lines of `client path => Graft path`.
+const mapText = (map: PathMapping[]) => map.map((m) => `${m.client} => ${m.graft}`).join('\n');
+const parseMap = (text: string): PathMapping[] =>
+  text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+    const [client, graft = ''] = l.split('=>').map((p) => p.trim());
+    return { client, graft };
+  });
+
+const emptyForm = (): CreateClientRequest & { username: string; password: string; link_dir: string; path_map_text: string } => ({
   name: '',
   client_type: 'qbittorrent',
   host: '',
@@ -20,6 +29,7 @@ const emptyForm = (): CreateClientRequest & { username: string; password: string
   password: '',
   use_https: false,
   link_dir: '',
+  path_map_text: '',
 });
 
 type FormState = ReturnType<typeof emptyForm>;
@@ -53,6 +63,7 @@ const Clients: Component = () => {
       username: client.username ?? '',
       use_https: client.use_https,
       link_dir: client.link_dir ?? '',
+      path_map_text: mapText(client.path_map),
     });
     setError('');
     setEditing(client);
@@ -61,11 +72,13 @@ const Clients: Component = () => {
   const save = async (e: Event) => {
     e.preventDefault();
     const current = editing();
+    const { path_map_text, ...fields } = form();
+    const request = { ...fields, path_map: parseMap(path_map_text) };
     try {
       if (current === 'new') {
-        await createClient(form());
+        await createClient(request);
       } else if (current) {
-        await updateClient(current.id, form());
+        await updateClient(current.id, request);
         if (testResult()?.id === current.id) setTestResult(null);
       }
       setEditing(null);
@@ -224,8 +237,18 @@ const Clients: Component = () => {
                 <input class="input input-bordered font-mono text-sm" value={form().link_dir}
                   placeholder="/downloads/graft-links" onInput={(e) => set('link_dir', e.currentTarget.value)} />
                 <span class="label-text-alt mt-1">
-                  文件名不同的种子在这里建硬链接。写下载器里看到的路径；Graft 要能按同一路径访问到数据，
-                  且这个目录必须和数据在同一个文件系统（ZFS 数据集）。别放进媒体库目录，以免被当成重复影片。
+                  文件名不同的种子在这里建硬链接。写下载器里看到的路径；必须和数据在同一个文件系统（ZFS 数据集），
+                  下载器也要看得到它。别放进媒体库目录，以免被当成重复影片。
+                </span>
+              </label>
+
+              <label class="form-control">
+                <span class="label-text">路径映射（可选）</span>
+                <textarea class="textarea textarea-bordered font-mono text-sm" rows="3" value={form().path_map_text}
+                  placeholder="/hdd_pool/movies => /film/Movies" onInput={(e) => set('path_map_text', e.currentTarget.value)} />
+                <span class="label-text-alt mt-1">
+                  下载器和 Graft 看到的路径不同时填，一行一条：下载器里的路径 =&gt; Graft 里的路径。
+                  硬链接不能跨挂载点：数据与硬链接目录要在 Graft 的同一个挂载里。
                 </span>
               </label>
 

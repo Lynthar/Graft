@@ -11,6 +11,7 @@ pub use transmission::TransmissionClient;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Unified error type for client operations
 #[derive(Debug, thiserror::Error)]
@@ -155,8 +156,30 @@ pub struct ClientConfig {
     pub username: Option<String>,
     pub password: Option<String>,
     pub use_https: bool,
-    /// Absolute path, as this client and Graft both see it, where hard links go.
+    /// Absolute path, as this client sees it, where hard links go.
     pub link_dir: Option<String>,
+    /// Where Graft finds the client's paths when the two see the files at different paths.
+    pub path_map: Vec<PathMapping>,
+}
+
+/// One path prefix as the client sees it and where Graft sees the same directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathMapping {
+    pub client: String,
+    pub graft: String,
+}
+
+/// `path` from the client, rewritten by the longest prefix in `map` that matches whole path
+/// components; a path no prefix matches is the same for Graft.
+pub fn graft_path(map: &[PathMapping], path: &str) -> PathBuf {
+    let matching = map.iter().filter_map(|m| {
+        let rest = path.strip_prefix(m.client.trim_end_matches('/'))?;
+        (rest.is_empty() || rest.starts_with('/')).then_some((m, rest))
+    });
+    match matching.max_by_key(|(m, _)| m.client.len()) {
+        Some((m, rest)) => PathBuf::from(format!("{}{rest}", m.graft.trim_end_matches('/'))),
+        None => PathBuf::from(path),
+    }
 }
 
 impl ClientConfig {
@@ -178,6 +201,16 @@ impl ClientConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_longest_whole_component_prefix_maps_a_client_path() {
+        let map = |c: &str, g: &str| PathMapping { client: c.into(), graft: g.into() };
+        let map = [map("/hdd_pool", "/film"), map("/hdd_pool/jilu/", "/film/Documentary")];
+        assert_eq!(graft_path(&map, "/hdd_pool/jilu/Planet/a.mkv"), PathBuf::from("/film/Documentary/Planet/a.mkv"));
+        assert_eq!(graft_path(&map, "/hdd_pool/movies"), PathBuf::from("/film/movies"));
+        assert_eq!(graft_path(&map, "/hdd_pool2/x"), PathBuf::from("/hdd_pool2/x"), "not a whole component");
+        assert_eq!(graft_path(&[], "/data/a"), PathBuf::from("/data/a"));
+    }
 
     #[test]
     fn an_unknown_client_type_in_the_database_is_an_error_not_qbittorrent() {

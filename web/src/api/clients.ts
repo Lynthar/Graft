@@ -10,6 +10,13 @@ export interface Client {
   use_https: boolean;
   enabled: boolean;
   link_dir?: string;
+  path_map: PathMapping[];
+}
+
+/** A path prefix as the client sees it, and where Graft sees the same directory. */
+export interface PathMapping {
+  client: string;
+  graft: string;
 }
 
 export interface CreateClientRequest {
@@ -21,6 +28,7 @@ export interface CreateClientRequest {
   password?: string;
   use_https: boolean;
   link_dir?: string;
+  path_map?: PathMapping[];
 }
 
 export const fetchClients = () => api.get<Client[]>('/clients');

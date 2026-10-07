@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/001_initial.sql"),
     include_str!("../../migrations/002_link_dir.sql"),
+    include_str!("../../migrations/003_path_map.sql"),
 ];
 
 /// Database wrapper with connection pooling
