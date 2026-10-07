@@ -78,7 +78,7 @@ pub async fn create(
     Json(req): Json<CreateSiteRequest>,
 ) -> Result<Json<SiteView>, AppError> {
     validate_id(&req.id)?;
-    let name = non_empty("name", &req.name)?;
+    let name = non_empty("名称", &req.name)?;
     let base_url = validate_base_url(&req.base_url)?;
     let pattern = match &req.download_pattern {
         Some(p) => validate_pattern(p)?,
@@ -113,7 +113,7 @@ pub async fn create(
         ],
     )?;
     if inserted == 0 {
-        return Err(AppError::bad_request(format!("A site with id {} already exists", req.id)));
+        return Err(AppError::bad_request(format!("id 为 {} 的站点已存在", req.id)));
     }
     replace_domains(&tx, &req.id, &domains)?;
     tx.commit()?;
@@ -130,7 +130,7 @@ pub async fn update(
     let mut conn = state.db.conn();
     let current = site::load(&conn, &id)?.ok_or_else(|| not_found(&id))?;
     let name = match &req.name {
-        Some(n) => non_empty("name", n)?,
+        Some(n) => non_empty("名称", n)?,
         None => current.name.clone(),
     };
     let base_url = match &req.base_url {
@@ -183,7 +183,7 @@ pub async fn remove(
     let site = site::load(&conn, &id)?.ok_or_else(|| not_found(&id))?;
     if site.builtin {
         return Err(AppError::bad_request(format!(
-            "{} is a built-in site; disable it instead of deleting it",
+            "{} 是内置站点，不能删除，可以停用",
             site.name
         )));
     }
@@ -192,7 +192,7 @@ pub async fn remove(
 }
 
 fn not_found(id: &str) -> AppError {
-    AppError::not_found(format!("No site with id {id}"))
+    AppError::not_found(format!("没有 id 为 {id} 的站点"))
 }
 
 fn secret(value: Option<String>) -> Option<String> {
@@ -202,7 +202,7 @@ fn secret(value: Option<String>) -> Option<String> {
 fn non_empty(field: &str, value: &str) -> Result<String, AppError> {
     let value = value.trim();
     if value.is_empty() {
-        return Err(AppError::bad_request(format!("{field} must not be empty")));
+        return Err(AppError::bad_request(format!("{field}不能为空")));
     }
     Ok(value.to_string())
 }
@@ -213,7 +213,7 @@ fn validate_id(id: &str) -> Result<(), AppError> {
     if ok {
         Ok(())
     } else {
-        Err(AppError::bad_request("Site id must be 1–32 characters of a–z, 0–9, - and _"))
+        Err(AppError::bad_request("站点 id 须为 1–32 个字符，只能用 a–z、0–9、- 和 _"))
     }
 }
 
@@ -221,7 +221,7 @@ fn validate_id(id: &str) -> Result<(), AppError> {
 /// leave the machine.
 fn validate_base_url(raw: &str) -> Result<String, AppError> {
     let url = url::Url::parse(raw.trim())
-        .map_err(|_| AppError::bad_request(format!("{raw:?} is not a valid URL")))?;
+        .map_err(|_| AppError::bad_request(format!("{raw:?} 不是有效的网址")))?;
     let loopback = match url.host() {
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
         Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
@@ -229,10 +229,10 @@ fn validate_base_url(raw: &str) -> Result<String, AppError> {
         None => false,
     };
     if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
-        return Err(AppError::bad_request("The site address must start with https://"));
+        return Err(AppError::bad_request("站点地址必须以 https:// 开头"));
     }
     if url.query().is_some() || url.fragment().is_some() || url.path() != "/" {
-        return Err(AppError::bad_request("The site address must be just scheme and host, e.g. https://example.org"));
+        return Err(AppError::bad_request("站点地址只写协议和主机名，例如 https://example.org"));
     }
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
@@ -240,7 +240,7 @@ fn validate_base_url(raw: &str) -> Result<String, AppError> {
 fn validate_pattern(pattern: &str) -> Result<String, AppError> {
     let pattern = pattern.trim();
     if !pattern.starts_with('/') || !pattern.contains("{id}") {
-        return Err(AppError::bad_request("The download pattern must start with / and contain {id}"));
+        return Err(AppError::bad_request("下载路径必须以 / 开头并包含 {id}"));
     }
     Ok(pattern.to_string())
 }
@@ -253,7 +253,7 @@ fn validate_domains(domains: &[String]) -> Result<Vec<String>, AppError> {
             && d.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
             && !d.starts_with('.');
         if !ok {
-            return Err(AppError::bad_request(format!("{d:?} is not a valid domain")));
+            return Err(AppError::bad_request(format!("{d:?} 不是有效的域名")));
         }
         if !out.contains(&d) {
             out.push(d);
@@ -271,7 +271,7 @@ fn validate_rpm(rpm: u32) -> Result<u32, AppError> {
     if (1..=60).contains(&rpm) {
         Ok(rpm)
     } else {
-        Err(AppError::bad_request("Requests per minute must be between 1 and 60"))
+        Err(AppError::bad_request("每分钟请求数须在 1 到 60 之间"))
     }
 }
 
@@ -279,7 +279,7 @@ fn validate_daily(limit: u32) -> Result<u32, AppError> {
     if limit <= 1000 {
         Ok(limit)
     } else {
-        Err(AppError::bad_request("The daily download limit must be at most 1000"))
+        Err(AppError::bad_request("每日下载上限最多 1000"))
     }
 }
 
@@ -290,7 +290,7 @@ fn replace_domains(conn: &Connection, site_id: &str, domains: &[String]) -> Resu
             .query_row("SELECT site_id FROM site_domains WHERE domain = ?1", [domain], |r| r.get(0))
             .optional()?;
         if let Some(owner) = owner {
-            return Err(AppError::bad_request(format!("The domain {domain} already belongs to site {owner}")));
+            return Err(AppError::bad_request(format!("域名 {domain} 已属于站点 {owner}")));
         }
         conn.execute("INSERT INTO site_domains (domain, site_id) VALUES (?1, ?2)", [domain, site_id])?;
     }

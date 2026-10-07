@@ -19,9 +19,9 @@ pub struct Metainfo {
 
 #[derive(Debug, thiserror::Error)]
 pub enum MetainfoError {
-    #[error("the file is larger than {MAX_TORRENT_BYTES} bytes")]
+    #[error("文件超过 {MAX_TORRENT_BYTES} 字节")]
     TooLarge,
-    #[error("not a valid torrent file: {0}")]
+    #[error("不是有效的种子文件：{0}")]
     Malformed(&'static str),
 }
 
@@ -54,26 +54,26 @@ pub fn parse(bytes: &[u8]) -> Result<Metainfo, MetainfoError> {
         return Err(MetainfoError::TooLarge);
     }
     if bytes.first() != Some(&b'd') {
-        return Err(Malformed("not a bencoded dictionary"));
+        return Err(Malformed("不是 bencode 字典"));
     }
     let mut info = None;
     let mut pos = 1;
-    while *bytes.get(pos).ok_or(Malformed("truncated"))? != b'e' {
-        let (key, key_end) = decode(bytes, pos, 1).ok_or(Malformed("bad key"))?;
-        let (value, end) = decode(bytes, key_end, 1).ok_or(Malformed("bad value"))?;
+    while *bytes.get(pos).ok_or(Malformed("数据被截断"))? != b'e' {
+        let (key, key_end) = decode(bytes, pos, 1).ok_or(Malformed("键无法解析"))?;
+        let (value, end) = decode(bytes, key_end, 1).ok_or(Malformed("值无法解析"))?;
         if matches!(key, Value::Bytes(b"info")) {
             info = Some((value, key_end..end));
         }
         pos = end;
     }
     if pos + 1 != bytes.len() {
-        return Err(Malformed("trailing bytes after the dictionary"));
+        return Err(Malformed("字典后面还有多余的数据"));
     }
-    let (info, span) = info.ok_or(Malformed("no info dictionary"))?;
+    let (info, span) = info.ok_or(Malformed("缺少 info 字典"))?;
 
     let pieces = match info.get("pieces") {
         Some(Value::Bytes(p)) if !p.is_empty() && p.len() % 20 == 0 => *p,
-        _ => return Err(Malformed("no v1 piece hashes")),
+        _ => return Err(Malformed("没有 v1 的 piece 哈希")),
     };
     let name = text(info.get("name.utf-8").or_else(|| info.get("name")))?;
     let files = match info.get("files") {
@@ -83,7 +83,7 @@ pub fn parse(bytes: &[u8]) -> Result<Metainfo, MetainfoError> {
             .map(|f| {
                 let parts = match f.get("path.utf-8").or_else(|| f.get("path")) {
                     Some(Value::List(parts)) if !parts.is_empty() => parts,
-                    _ => return Err(Malformed("a file has no path")),
+                    _ => return Err(Malformed("有文件缺少路径")),
                 };
                 let mut path = name.clone();
                 for part in parts {
@@ -93,7 +93,7 @@ pub fn parse(bytes: &[u8]) -> Result<Metainfo, MetainfoError> {
                 Ok((path, length(f.get("length"))?))
             })
             .collect::<Result<_, _>>()?,
-        Some(_) => return Err(Malformed("files is not a list")),
+        Some(_) => return Err(Malformed("files 不是列表")),
     };
 
     Ok(Metainfo { info_hash: sha1_hex(&bytes[span]), pieces_hash: sha1_hex(pieces), files })
@@ -106,16 +106,16 @@ pub fn sha1_hex(bytes: &[u8]) -> String {
 fn text(value: Option<&Value>) -> Result<String, MetainfoError> {
     match value {
         Some(Value::Bytes(b)) if !b.is_empty() => {
-            String::from_utf8(b.to_vec()).map_err(|_| Malformed("a name is not UTF-8"))
+            String::from_utf8(b.to_vec()).map_err(|_| Malformed("有名字不是 UTF-8"))
         }
-        _ => Err(Malformed("missing or empty name")),
+        _ => Err(Malformed("名字缺失或为空")),
     }
 }
 
 fn length(value: Option<&Value>) -> Result<u64, MetainfoError> {
     match value {
-        Some(Value::Int(n)) => u64::try_from(*n).map_err(|_| Malformed("negative length")),
-        _ => Err(Malformed("missing length")),
+        Some(Value::Int(n)) => u64::try_from(*n).map_err(|_| Malformed("长度为负")),
+        _ => Err(Malformed("缺少长度")),
     }
 }
 

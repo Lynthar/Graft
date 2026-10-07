@@ -55,7 +55,7 @@ impl From<anyhow::Error> for AppError {
 impl From<rusqlite::Error> for AppError {
     fn from(err: rusqlite::Error) -> Self {
         tracing::error!("Database error: {:?}", err);
-        Self::internal(format!("Database error: {}", err))
+        Self::internal(format!("数据库错误：{}", err))
     }
 }
 

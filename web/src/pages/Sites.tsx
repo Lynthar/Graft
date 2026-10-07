@@ -117,7 +117,7 @@ const Sites: Component = () => {
   };
 
   const remove = async (site: Site) => {
-    if (!confirm(`Delete ${site.name}?`)) return;
+    if (!confirm(`确定删除 ${site.name}？`)) return;
     try {
       await deleteSite(site.id);
       refetch();
@@ -131,25 +131,24 @@ const Sites: Component = () => {
   return (
     <div>
       <div class="flex justify-between items-center mb-6">
-        <h1 class="page-title mb-0">PT Sites</h1>
-        <button class="btn btn-primary" onClick={openNew}>Add custom site</button>
+        <h1 class="page-title mb-0">站点</h1>
+        <button class="btn btn-primary" onClick={openNew}>添加自定义站点</button>
       </div>
 
       <p class="mb-4 text-base-content/70">
-        Built-in sites are listed disabled. Edit one to store your passkey, then enable it. Only NexusPHP sites can
-        be searched by content; credentials are stored in plain text in the database file.
+        内置站点默认停用：编辑填好 passkey 后再启用。只有 NexusPHP 站点能按内容直查；凭据以明文存在数据库文件里。
       </p>
 
       <div class="table-container">
         <table class="table">
           <thead>
             <tr>
-              <th>Site</th>
-              <th>Type</th>
-              <th>Tracker domains</th>
+              <th>站点</th>
+              <th>类型</th>
+              <th>Tracker 域名</th>
               <th>Passkey</th>
-              <th>Limits</th>
-              <th>Enabled</th>
+              <th>限额</th>
+              <th>启用</th>
               <th></th>
             </tr>
           </thead>
@@ -163,16 +162,16 @@ const Sites: Component = () => {
                   </td>
                   <td><span class="badge badge-outline">{site.template_type}</span></td>
                   <td class="text-xs">{site.domains.join(', ')}</td>
-                  <td>{site.has_passkey ? '✓' : '—'}</td>
-                  <td class="text-xs">{site.rate_limit_rpm}/min · {site.daily_limit}/day</td>
+                  <td>{site.has_passkey ? '已填' : '—'}</td>
+                  <td class="text-xs">每分钟 {site.rate_limit_rpm} 次 · 每天 {site.daily_limit} 个</td>
                   <td>
                     <input type="checkbox" class="toggle toggle-success toggle-sm" checked={site.enabled}
                       onChange={() => toggle(site)} />
                   </td>
                   <td class="whitespace-nowrap">
-                    <button class="btn btn-sm btn-ghost" onClick={() => openEdit(site)}>Edit</button>
+                    <button class="btn btn-sm btn-ghost" onClick={() => openEdit(site)}>编辑</button>
                     <Show when={!site.builtin}>
-                      <button class="btn btn-sm btn-error btn-outline" onClick={() => remove(site)}>Delete</button>
+                      <button class="btn btn-sm btn-error btn-outline" onClick={() => remove(site)}>删除</button>
                     </Show>
                   </td>
                 </tr>
@@ -185,16 +184,16 @@ const Sites: Component = () => {
       <Show when={editing()}>
         <div class="modal modal-open">
           <div class="modal-box max-w-xl">
-            <h3 class="font-bold text-lg mb-4">{isNew() ? 'Add custom site' : `Edit ${form().name}`}</h3>
+            <h3 class="font-bold text-lg mb-4">{isNew() ? '添加自定义站点' : `编辑 ${form().name}`}</h3>
             <form onSubmit={save} class="space-y-3">
               <Show when={isNew()}>
                 <div class="grid grid-cols-2 gap-3">
                   <label class="form-control">
-                    <span class="label-text">Id (a–z, 0–9, -, _)</span>
+                    <span class="label-text">id（a–z、0–9、-、_）</span>
                     <input class="input input-bordered" value={form().id} onInput={(e) => set('id', e.currentTarget.value)} required />
                   </label>
                   <label class="form-control">
-                    <span class="label-text">Type</span>
+                    <span class="label-text">类型</span>
                     <select class="select select-bordered" value={form().template_type}
                       onChange={(e) => set('template_type', e.currentTarget.value)}>
                       <option value="nexusphp">nexusphp</option>
@@ -205,25 +204,25 @@ const Sites: Component = () => {
                 </div>
               </Show>
               <label class="form-control">
-                <span class="label-text">Name</span>
+                <span class="label-text">名称</span>
                 <input class="input input-bordered" value={form().name} onInput={(e) => set('name', e.currentTarget.value)} required />
               </label>
               <label class="form-control">
-                <span class="label-text">Address (https only)</span>
+                <span class="label-text">地址（只收 https）</span>
                 <input class="input input-bordered" value={form().base_url} onInput={(e) => set('base_url', e.currentTarget.value)} required />
               </label>
               <label class="form-control">
-                <span class="label-text">Tracker domains (comma separated; subdomains match too)</span>
-                <input class="input input-bordered" value={form().domains} placeholder="defaults to the address's domain"
+                <span class="label-text">Tracker 域名（逗号分隔，子域名也算）</span>
+                <input class="input input-bordered" value={form().domains} placeholder="不填则用地址的域名"
                   onInput={(e) => set('domains', e.currentTarget.value)} />
               </label>
               <label class="form-control">
-                <span class="label-text">Download pattern ({'{id}'}, {'{passkey}'}, {'{authkey}'})</span>
+                <span class="label-text">下载路径（可用 {'{id}'}、{'{passkey}'}、{'{authkey}'}）</span>
                 <input class="input input-bordered font-mono text-sm" value={form().download_pattern}
-                  placeholder="default for the type" onInput={(e) => set('download_pattern', e.currentTarget.value)} />
+                  placeholder="不填则用该类型的缺省值" onInput={(e) => set('download_pattern', e.currentTarget.value)} />
               </label>
               <label class="form-control">
-                <span class="label-text">Passkey {isNew() ? '' : '(leave blank to keep the stored one)'}</span>
+                <span class="label-text">Passkey{isNew() ? '' : '（留空则保留已存的）'}</span>
                 <input type="password" class="input input-bordered" value={form().passkey}
                   onInput={(e) => set('passkey', e.currentTarget.value)} autocomplete="off" />
               </label>
@@ -236,29 +235,29 @@ const Sites: Component = () => {
               </Show>
               <div class="grid grid-cols-2 gap-3">
                 <label class="form-control">
-                  <span class="label-text">Requests per minute (1–60)</span>
+                  <span class="label-text">每分钟请求数（1–60）</span>
                   <input type="number" min="1" max="60" class="input input-bordered" value={form().rate_limit_rpm}
                     onInput={(e) => set('rate_limit_rpm', Number(e.currentTarget.value))} />
                 </label>
                 <label class="form-control">
-                  <span class="label-text">Downloads per day</span>
+                  <span class="label-text">每天下载数</span>
                   <input type="number" min="0" max="1000" class="input input-bordered" value={form().daily_limit}
                     onInput={(e) => set('daily_limit', Number(e.currentTarget.value))} />
                 </label>
               </div>
               <label class="label cursor-pointer justify-start gap-3">
                 <input type="checkbox" class="checkbox" checked={form().enabled} onChange={(e) => set('enabled', e.currentTarget.checked)} />
-                <span class="label-text">Enabled</span>
+                <span class="label-text">启用</span>
               </label>
               <p class="text-xs text-base-content/70">
-                Passkeys and authkeys are stored in plain text in Graft's database file, which only its owner can read.
+                Passkey 与 authkey 以明文存在 Graft 的数据库文件里，该文件只有属主能读。
               </p>
               <Show when={error()}>
                 <div class="alert alert-error text-sm">{error()}</div>
               </Show>
               <div class="modal-action">
-                <button type="button" class="btn btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
-                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn btn-ghost" onClick={() => setEditing(null)}>取消</button>
+                <button type="submit" class="btn btn-primary">保存</button>
               </div>
             </form>
           </div>

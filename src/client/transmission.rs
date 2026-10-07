@@ -70,7 +70,7 @@ impl TransmissionClient {
                 return Err(ClientError::AuthenticationFailed);
             }
             if !response.status().is_success() {
-                return Err(ClientError::InvalidResponse(format!("Status: {}", response.status())));
+                return Err(ClientError::InvalidResponse(format!("HTTP {}", response.status())));
             }
 
             let rpc_response: RpcResponse<T> = response.json().await?;
@@ -79,9 +79,9 @@ impl TransmissionClient {
             }
             return rpc_response
                 .arguments
-                .ok_or_else(|| ClientError::InvalidResponse("Missing arguments".to_string()));
+                .ok_or_else(|| ClientError::InvalidResponse("响应里缺少 arguments".to_string()));
         }
-        Err(ClientError::InvalidResponse("session id rejected twice".to_string()))
+        Err(ClientError::InvalidResponse("session id 连续两次被拒".to_string()))
     }
 }
 
@@ -101,7 +101,7 @@ impl BitTorrentClient for TransmissionClient {
     }
 
     async fn get_piece_hashes(&self, _hash: &str) -> Result<Vec<String>> {
-        Err(ClientError::Unsupported("Transmission does not report piece hashes"))
+        Err(ClientError::Unsupported("Transmission 不提供 piece 哈希"))
     }
 
     async fn get_torrent_files(&self, hash: &str) -> Result<Vec<TorrentFile>> {
@@ -144,7 +144,7 @@ impl BitTorrentClient for TransmissionClient {
                 set.map(|_| ()).map_err(|e| ClientError::LabelsNotSet(e.to_string()))
             }
             (None, Some(_)) => Err(ClientError::Duplicate),
-            (None, None) => Err(ClientError::InvalidResponse("torrent-add returned no torrent".into())),
+            (None, None) => Err(ClientError::InvalidResponse("torrent-add 没有返回种子".into())),
         }
     }
 }

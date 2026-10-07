@@ -15,25 +15,25 @@ use serde::{Deserialize, Serialize};
 /// Unified error type for client operations
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
-    #[error("Authentication failed")]
+    #[error("下载器登录失败，用户名或密码不对")]
     AuthenticationFailed,
 
-    #[error("Request failed: {0}")]
+    #[error("连不上下载器：{0}")]
     RequestFailed(String),
 
-    #[error("Invalid response: {0}")]
+    #[error("下载器返回的内容不对：{0}")]
     InvalidResponse(String),
 
-    #[error("Torrent not found: {0}")]
+    #[error("下载器里没有这个种子：{0}")]
     TorrentNotFound(String),
 
-    #[error("Not supported: {0}")]
+    #[error("不支持：{0}")]
     Unsupported(&'static str),
 
-    #[error("The client already has this torrent")]
+    #[error("下载器里已经有这个种子")]
     Duplicate,
 
-    #[error("Labels not set: {0}")]
+    #[error("没能打上标签：{0}")]
     LabelsNotSet(String),
 }
 
@@ -70,7 +70,7 @@ impl std::str::FromStr for ClientType {
         match s.to_lowercase().as_str() {
             "qbittorrent" | "qb" => Ok(ClientType::QBittorrent),
             "transmission" | "tr" => Ok(ClientType::Transmission),
-            _ => Err(format!("Unknown client type: {}", s)),
+            _ => Err(format!("未知的下载器类型：{}", s)),
         }
     }
 }

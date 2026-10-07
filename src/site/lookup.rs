@@ -12,15 +12,15 @@ pub const MAX_BATCH: usize = 100;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LookupError {
-    #[error("the site has no pieces-hash endpoint (HTTP 404); it needs NexusPHP from 2023-07 or later")]
+    #[error("站点没有 pieces-hash 接口（HTTP 404），需要 2023-07 之后的 NexusPHP")]
     NoEndpoint,
-    #[error("the site rejected the passkey: {0}")]
+    #[error("站点拒绝了 passkey：{0}")]
     Rejected(String),
-    #[error("the site is rate limiting requests (HTTP 429)")]
+    #[error("站点在限流（HTTP 429）")]
     RateLimited,
-    #[error("unexpected answer from the site: {0}")]
+    #[error("站点返回了意外的内容：{0}")]
     Unexpected(String),
-    #[error("could not reach the site: {0}")]
+    #[error("连不上站点：{0}")]
     Network(String),
 }
 
@@ -74,18 +74,18 @@ pub async fn query(
 
     match (status, envelope) {
         (StatusCode::TOO_MANY_REQUESTS, _) => Err(LookupError::RateLimited),
-        (s, _) if s.is_redirection() => Err(LookupError::Rejected(format!("HTTP {s}, redirected to login"))),
+        (s, _) if s.is_redirection() => Err(LookupError::Rejected(format!("HTTP {s}，被重定向到登录页"))),
         (StatusCode::NOT_FOUND, _) => Err(LookupError::NoEndpoint),
         (StatusCode::OK, Some(Envelope { ret: Some(0), data, .. })) => parse_hits(data),
         (s, Some(e)) if s == StatusCode::UNAUTHORIZED || s == StatusCode::FORBIDDEN => Err(
             LookupError::Rejected(scrub(&e.msg.or(e.message).unwrap_or_else(|| format!("HTTP {s}")))),
         ),
         (s, Some(e)) => Err(LookupError::Unexpected(format!(
-            "HTTP {s}, ret {:?}: {}",
+            "HTTP {s}，ret {:?}：{}",
             e.ret,
             scrub(&e.msg.or(e.message).unwrap_or_default())
         ))),
-        (s, None) => Err(LookupError::Unexpected(format!("HTTP {s}, not JSON: {}", scrub(&body)))),
+        (s, None) => Err(LookupError::Unexpected(format!("HTTP {s}，不是 JSON：{}", scrub(&body)))),
     }
 }
 
@@ -95,17 +95,17 @@ fn parse_hits(data: Option<serde_json::Value>) -> Result<HashMap<String, String>
         // PHP encodes an empty result as [] unless it is cast to an object.
         Some(serde_json::Value::Array(a)) if a.is_empty() => return Ok(HashMap::new()),
         None | Some(serde_json::Value::Null) => return Ok(HashMap::new()),
-        Some(other) => return Err(LookupError::Unexpected(format!("data is {other}"))),
+        Some(other) => return Err(LookupError::Unexpected(format!("data 字段是 {other}"))),
     };
     map.into_iter()
         .map(|(hash, id)| {
             let id = match id {
                 serde_json::Value::Number(n) => n.to_string(),
                 serde_json::Value::String(s) => s,
-                other => return Err(LookupError::Unexpected(format!("torrent id {other}"))),
+                other => return Err(LookupError::Unexpected(format!("种子 id 是 {other}"))),
             };
             if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
-                return Err(LookupError::Unexpected(format!("torrent id {id:?} is not a number")));
+                return Err(LookupError::Unexpected(format!("种子 id {id:?} 不是数字")));
             }
             Ok((hash.to_ascii_lowercase(), id))
         })

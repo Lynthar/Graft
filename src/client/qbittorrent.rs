@@ -66,7 +66,7 @@ impl QBittorrentClient {
             return Err(ClientError::TorrentNotFound(hash.unwrap_or_default().to_string()));
         }
         if !response.status().is_success() {
-            return Err(ClientError::InvalidResponse(format!("Status: {}", response.status())));
+            return Err(ClientError::InvalidResponse(format!("HTTP {}", response.status())));
         }
         Ok(response.json().await?)
     }
@@ -128,7 +128,7 @@ impl BitTorrentClient for QBittorrentClient {
         match status {
             StatusCode::CONFLICT => Err(ClientError::Duplicate),
             s if s.is_success() && body.trim() != "Fails." => Ok(()),
-            s => Err(ClientError::InvalidResponse(format!("Status: {s}, {}", body.trim()))),
+            s => Err(ClientError::InvalidResponse(format!("HTTP {s}，{}", body.trim()))),
         }
     }
 }

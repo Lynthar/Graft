@@ -174,8 +174,8 @@ impl ReseedService {
     /// Read the source client, then ask every target site which contents it carries.
     pub async fn preview(&self, task: &Task, source: ClientConfig, targets: Vec<Site>) -> anyhow::Result<Preview> {
         let client = source.create_client();
-        task.progress("reading the source client", 0, 0);
-        let torrents = client.get_torrents().await.context("could not read the source client")?;
+        task.progress("读取来源下载器", 0, 0);
+        let torrents = client.get_torrents().await.context("读不了来源下载器")?;
         let all_sites = site::load_all(&self.db.conn())?;
 
         let mut report = ReadReport { total: torrents.len(), ..Default::default() };
@@ -189,10 +189,10 @@ impl ReseedService {
             let site = t.tracker.as_deref().and_then(|url| site::recognize(&all_sites, url));
             match (site, &t.tracker) {
                 (Some(s), _) => *report.recognized.entry(s.id.clone()).or_default() += 1,
-                (None, None) => *unrecognized.entry("no working tracker".into()).or_default() += 1,
+                (None, None) => *unrecognized.entry("没有可用的 tracker".into()).or_default() += 1,
                 (None, Some(url)) => {
-                    let host = site::host_of(url).unwrap_or_else(|| "unreadable tracker URL".into());
-                    *unrecognized.entry(format!("no site has the domain {host}")).or_default() += 1;
+                    let host = site::host_of(url).unwrap_or_else(|| "无法解析的 tracker 地址".into());
+                    *unrecognized.entry(format!("没有站点认领域名 {host}")).or_default() += 1;
                 }
             }
             let site_id = site.map(|s| s.id.clone());
@@ -212,7 +212,7 @@ impl ReseedService {
             if task.is_cancelled() {
                 break;
             }
-            task.progress(&format!("asking {}", site.name), i, targets.len());
+            task.progress(&format!("查询 {}", site.name), i, targets.len());
             let (site_report, hits) = self.query_site(task, site, &complete, &pieces).await;
             let mut site_report = site_report;
             let mut seen_ids = HashSet::new();
@@ -250,15 +250,15 @@ impl ReseedService {
                     evidence: "pieces_equal",
                     needs_confirmation,
                     note: if needs_confirmation {
-                        "the local torrent's site is not recognized; it may be this same site".into()
+                        "认不出本地种子来自哪个站，可能就是这个站本身".into()
                     } else {
-                        "the site has a torrent with identical pieces; file layout is checked after download".into()
+                        "站点上有 pieces 完全相同的种子，下载后再核对文件布局".into()
                     },
                 });
             }
             preview.sites.push(site_report);
         }
-        task.progress("done", targets.len(), targets.len());
+        task.progress("完成", targets.len(), targets.len());
         Ok(preview)
     }
 
@@ -291,15 +291,15 @@ impl ReseedService {
         let mut result = HashMap::new();
         for (i, (t, _)) in torrents.iter().enumerate() {
             if task.is_cancelled() {
-                bail!("cancelled while reading piece hashes");
+                bail!("读取 piece 哈希时被取消");
             }
             if let Some(ph) = known.remove(&t.hash) {
                 result.insert(t.hash.clone(), ph);
                 continue;
             }
-            task.progress("reading piece hashes", i, torrents.len());
+            task.progress("读取 piece 哈希", i, torrents.len());
             match client.get_piece_hashes(&t.hash).await {
-                Ok(hexes) if hexes.is_empty() => *missing.entry("no metadata yet".into()).or_default() += 1,
+                Ok(hexes) if hexes.is_empty() => *missing.entry("还没有元数据".into()).or_default() += 1,
                 Ok(hexes) => match concat_hex(&hexes) {
                     Some(bytes) => {
                         let ph = sha1_hex(&bytes);
@@ -309,10 +309,10 @@ impl ReseedService {
                         )?;
                         result.insert(t.hash.clone(), ph);
                     }
-                    None => *missing.entry("the client returned malformed piece hashes".into()).or_default() += 1,
+                    None => *missing.entry("下载器返回的 piece 哈希格式不对".into()).or_default() += 1,
                 },
-                Err(ClientError::Unsupported(why)) => bail!("this client cannot be a source: {why}"),
-                Err(e) => *missing.entry(format!("reading piece hashes failed: {e}")).or_default() += 1,
+                Err(ClientError::Unsupported(why)) => bail!("这个下载器不能作来源：{why}"),
+                Err(e) => *missing.entry(format!("读取 piece 哈希失败：{e}")).or_default() += 1,
             }
         }
         report.without_pieces = into_reasons(missing);
@@ -338,7 +338,7 @@ impl ReseedService {
             return (report, HashMap::new());
         }
         if site.passkey.is_none() {
-            report.error = Some("no passkey is stored for this site".into());
+            report.error = Some("这个站没有填 passkey".into());
             return (report, HashMap::new());
         }
         // Torrents from the site itself are not looked up there: they are already seeded.
@@ -399,7 +399,7 @@ impl ReseedService {
                 summary.not_attempted = candidates.len() - i;
                 break;
             }
-            task.progress("adding torrents", i, candidates.len());
+            task.progress("加种", i, candidates.len());
             let outcome = self
                 .execute_one(task, candidate, source_client.as_ref(), target_client.as_ref(), &target.id, &mut added)
                 .await;
@@ -440,7 +440,7 @@ impl ReseedService {
                 message: outcome.message,
             });
         }
-        task.progress("done", candidates.len(), candidates.len());
+        task.progress("完成", candidates.len(), candidates.len());
         info!(run = %run_id, success = summary.success, skipped = summary.skipped, failed = summary.failed, "reseed run finished");
         Ok(summary)
     }
@@ -456,7 +456,7 @@ impl ReseedService {
     ) -> Outcome {
         let site = match site::load(&self.db.conn(), &candidate.target_site) {
             Ok(Some(s)) if s.enabled => s,
-            Ok(_) => return Outcome::new("failed", "site", "the site is no longer enabled"),
+            Ok(_) => return Outcome::new("failed", "site", "站点已停用"),
             Err(e) => return Outcome::new("failed", "site", e.to_string()),
         };
         // A rerun must not fetch again what an earlier run already added and is still there.
@@ -472,7 +472,7 @@ impl ReseedService {
         };
         if let Some(hash) = earlier {
             if let Ok(true) = target.has_torrent(&hash).await {
-                let mut o = Outcome::new("skipped", "exists", "an earlier run added this torrent and it is still there");
+                let mut o = Outcome::new("skipped", "exists", "之前的执行已经加过，下载器里还在");
                 o.target_hash = Some(hash);
                 return o;
             }
@@ -490,13 +490,13 @@ impl ReseedService {
             return Outcome::new(
                 "skipped",
                 "daily_limit",
-                format!("the site's daily limit of {} downloads is used up", site.daily_limit),
+                format!("站点今天的 {} 次下载额度已用完", site.daily_limit),
             );
         }
 
         tokio::select! {
             _ = self.gates.wait(&site.id, site.rate_limit_rpm) => {}
-            _ = task.cancelled() => return Outcome::new("skipped", "cancelled", "cancelled"),
+            _ = task.cancelled() => return Outcome::new("skipped", "cancelled", "已取消"),
         }
         let downloaded = site.create_template().download_torrent(&self.downloads, &candidate.target_torrent_id).await;
         // A missing credential fails before any request reaches the site.
@@ -533,16 +533,16 @@ impl ReseedService {
             return with_hash(Outcome::new(
                 "failed",
                 "verify",
-                "the downloaded torrent's pieces differ from the lookup result",
+                "下载到的种子 pieces 与查询结果不符",
             ));
         }
         if added.contains(&meta.info_hash) {
-            return with_hash(Outcome::new("skipped", "exists", "already added in this run"));
+            return with_hash(Outcome::new("skipped", "exists", "本轮已经加过"));
         }
         match target.has_torrent(&meta.info_hash).await {
-            Ok(true) => return with_hash(Outcome::new("skipped", "exists", "the target client already has this torrent")),
+            Ok(true) => return with_hash(Outcome::new("skipped", "exists", "目标下载器里已经有这个种子")),
             Ok(false) => {}
-            Err(e) => return with_hash(Outcome::new("failed", "exists", format!("could not read the target client: {e}"))),
+            Err(e) => return with_hash(Outcome::new("failed", "exists", format!("读不了目标下载器：{e}"))),
         }
 
         let on_disk = match source.get_torrent_files(&candidate.source_hash).await {
@@ -551,20 +551,20 @@ impl ReseedService {
                 f.sort();
                 f
             }
-            Err(e) => return with_hash(Outcome::new("failed", "layout", format!("could not read the local files: {e}"))),
+            Err(e) => return with_hash(Outcome::new("failed", "layout", format!("读不了本地的文件列表：{e}"))),
         };
         let mut wanted = meta.files.clone();
         wanted.sort();
         if wanted != on_disk {
             let first = wanted.iter().zip(&on_disk).find(|(a, b)| a != b).map(|(a, b)| (a.0.clone(), b.0.clone()));
             let detail = match first {
-                Some((want, have)) => format!("the torrent expects {want:?}, the disk has {have:?}"),
-                None => format!("the torrent has {} files, the disk has {}", wanted.len(), on_disk.len()),
+                Some((want, have)) => format!("种子里是 {want:?}，磁盘上是 {have:?}"),
+                None => format!("种子里有 {} 个文件，磁盘上有 {} 个", wanted.len(), on_disk.len()),
             };
             return with_hash(Outcome::new(
                 "skipped",
                 "layout",
-                format!("same pieces but a different file layout, which needs hard-linking (not supported yet): {detail}"),
+                format!("pieces 相同但文件布局不同，需要硬链接辅种（尚未支持）：{detail}"),
             ));
         }
 
@@ -572,7 +572,7 @@ impl ReseedService {
         let add_error = match target.add_torrent(&bytes, options).await {
             Ok(()) => None,
             Err(ClientError::Duplicate) => {
-                return with_hash(Outcome::new("skipped", "exists", "the target client already has this torrent"))
+                return with_hash(Outcome::new("skipped", "exists", "目标下载器里已经有这个种子"))
             }
             Err(e) => Some(e.to_string()),
         };
@@ -583,9 +583,9 @@ impl ReseedService {
             }
             if let Ok(true) = target.has_torrent(&meta.info_hash).await {
                 added.insert(meta.info_hash.clone());
-                let mut message = "added stopped; the client checks the data before it seeds".to_string();
+                let mut message = "已暂停加入，下载器校验数据后才会做种".to_string();
                 if let Some(e) = &add_error {
-                    message.push_str(&format!(". Warning: {e}"));
+                    message.push_str(&format!("。警告：{e}"));
                 }
                 return with_hash(Outcome::new("success", "added", message));
             }
@@ -593,7 +593,7 @@ impl ReseedService {
         with_hash(Outcome::new(
             "failed",
             "add",
-            add_error.unwrap_or_else(|| "the client did not list the torrent after adding it".into()),
+            add_error.unwrap_or_else(|| "加入后下载器的列表里没有这个种子".into()),
         ))
     }
 }

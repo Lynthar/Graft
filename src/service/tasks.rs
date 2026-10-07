@@ -102,7 +102,7 @@ impl TaskRegistry {
                 id: String::new(),
                 kind,
                 status: Status::Running,
-                progress: Progress { phase: "starting".into(), done: 0, total: 0 },
+                progress: Progress { phase: "启动中".into(), done: 0, total: 0 },
                 error: None,
                 result: None,
             }),

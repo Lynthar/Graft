@@ -44,7 +44,7 @@ impl std::str::FromStr for TemplateType {
             "nexusphp" | "nexus" => Ok(TemplateType::NexusPHP),
             "unit3d" => Ok(TemplateType::Unit3D),
             "gazelle" => Ok(TemplateType::Gazelle),
-            _ => Err(TemplateError::InvalidResponse(format!("Unknown template type: {}", s))),
+            _ => Err(TemplateError::InvalidResponse(format!("未知的模板类型：{}", s))),
         }
     }
 }
@@ -52,19 +52,19 @@ impl std::str::FromStr for TemplateType {
 /// Error type for template operations
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateError {
-    #[error("Missing passkey")]
+    #[error("没有填 passkey")]
     MissingPasskey,
 
-    #[error("Missing authkey")]
+    #[error("没有填 authkey")]
     MissingAuthkey,
 
-    #[error("Download failed: {0}")]
+    #[error("下载失败：{0}")]
     DownloadFailed(String),
 
-    #[error("HTTP error: {0}")]
+    #[error("HTTP 错误：{0}")]
     HttpError(String),
 
-    #[error("Invalid response: {0}")]
+    #[error("站点返回的内容不对：{0}")]
     InvalidResponse(String),
 }
 
@@ -109,13 +109,13 @@ pub(crate) async fn fetch_torrent(http: &reqwest::Client, site: &Site, torrent_i
         .is_some_and(|v| v.contains("text/html"));
     if is_html {
         return Err(TemplateError::InvalidResponse(
-            "the site answered with a web page instead of a torrent (login expired or no access?)".into(),
+            "站点返回的是网页而不是种子文件（登录过期或没有权限？）".into(),
         ));
     }
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         if body.len() + chunk.len() > MAX_TORRENT_BYTES {
-            return Err(TemplateError::InvalidResponse("the torrent file is too large".into()));
+            return Err(TemplateError::InvalidResponse("种子文件太大".into()));
         }
         body.extend_from_slice(&chunk);
     }

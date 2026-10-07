@@ -21,7 +21,7 @@ async function request<T>(
     toLogin();
   }
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+    const error = await response.json().catch(() => ({ error: '未知错误' }));
     throw new Error(error.error || `HTTP ${response.status}`);
   }
 
