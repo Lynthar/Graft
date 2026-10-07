@@ -132,8 +132,12 @@ pub fn load(conn: &Connection, id: &str) -> rusqlite::Result<Option<Site>> {
 
 /// The site whose tracker domain matches the host of `tracker_url`.
 pub fn recognize<'a>(sites: &'a [Site], tracker_url: &str) -> Option<&'a Site> {
-    let host = url::Url::parse(tracker_url).ok()?.host_str()?.to_string();
-    sites.iter().find(|s| s.owns_host(&host))
+    recognize_host(sites, url::Url::parse(tracker_url).ok()?.host_str()?)
+}
+
+/// The site whose domains cover `host`.
+pub fn recognize_host<'a>(sites: &'a [Site], host: &str) -> Option<&'a Site> {
+    sites.iter().find(|s| s.owns_host(host))
 }
 
 /// Host part of a URL, for reports; never the full URL, which may carry a passkey.

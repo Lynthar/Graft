@@ -49,6 +49,10 @@ impl Content {
 
     /// The `.torrent` a site serves; `source` changes the info hash, as sites do.
     pub fn torrent(&self, source: &str) -> (Vec<u8>, String) {
+        self.torrent_announcing("http://t/a.php", source)
+    }
+
+    pub fn torrent_announcing(&self, announce: &str, source: &str) -> (Vec<u8>, String) {
         let mut info = b"d5:filesl".to_vec();
         for (path, len) in &self.files {
             info.extend(format!("d6:lengthi{len}e4:pathl").bytes());
@@ -60,7 +64,7 @@ impl Content {
         info.extend(format!("e4:name{}:{}12:piece lengthi16384e6:pieces{}:", self.name.len(), self.name, self.pieces.len()).bytes());
         info.extend(&self.pieces);
         info.extend(format!("6:source{}:{}e", source.len(), source).bytes());
-        let mut bytes = b"d8:announce14:http://t/a.php4:info".to_vec();
+        let mut bytes = format!("d8:announce{}:{announce}4:info", announce.len()).into_bytes();
         bytes.extend(&info);
         bytes.push(b'e');
         (bytes, sha1_hex(&info))
@@ -617,6 +621,19 @@ impl Graft {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         panic!("task {id} did not finish");
+    }
+
+    /// Upload `.torrent` files to match against `client`; returns the preview id and result.
+    pub async fn import(&self, client: &str, files: &[(&str, &[u8])]) -> (String, Value) {
+        let files: Vec<Value> = files
+            .iter()
+            .map(|(name, bytes)| json!({"name": name, "data": base64::engine::general_purpose::STANDARD.encode(bytes)}))
+            .collect();
+        let (status, started) = self.post("/reseed/import", json!({"source_client_id": client, "files": files})).await;
+        assert_eq!(status, StatusCode::OK, "{started}");
+        let snap = self.wait_task(&started).await;
+        assert_eq!(snap["status"], "done", "{snap}");
+        (started["task_id"].as_str().unwrap().to_string(), snap["result"].clone())
     }
 
     pub async fn preview(&self, client: &str, sites: &[&str]) -> (String, Value) {

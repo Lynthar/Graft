@@ -28,7 +28,19 @@ pub struct Preview {
     pub source_client_id: String,
     pub read: ReadReport,
     pub sites: Vec<SiteReport>,
+    /// One entry per uploaded `.torrent`; empty for a preview that asked sites.
+    pub imports: Vec<ImportReport>,
     pub candidates: Vec<Candidate>,
+}
+
+/// What became of one uploaded `.torrent`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportReport {
+    pub file: String,
+    pub site: Option<String>,
+    /// `candidate`, `seeding`, `partial`, `none` or `invalid`.
+    pub outcome: &'static str,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -64,13 +76,19 @@ pub struct Candidate {
     pub save_path: String,
     pub size: u64,
     pub pieces_hash: String,
+    /// Empty when an uploaded torrent's tracker belongs to no configured site.
     pub target_site: String,
+    /// Empty for an uploaded torrent, which names no torrent id on its site.
     pub target_torrent_id: String,
-    /// The site indexes the same `info.pieces` as the local torrent.
+    /// `pieces_equal`: same `info.pieces` as the local torrent. `files_equal`: different
+    /// pieces, same file paths and sizes; only the client's check can confirm it.
     pub evidence: &'static str,
     /// Must be confirmed one by one before execution may include it.
     pub needs_confirmation: bool,
     pub note: String,
+    /// The uploaded `.torrent`; execution adds it without asking its site for anything.
+    #[serde(skip)]
+    pub torrent: Option<Arc<Vec<u8>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,6 +142,24 @@ pub struct ReseedService {
     busy: Arc<Mutex<HashSet<String>>>,
 }
 
+struct SourceScan {
+    client: Box<dyn BitTorrentClient>,
+    sites: Vec<Site>,
+    report: ReadReport,
+    /// Complete torrents with the site their tracker belongs to.
+    complete: Vec<(TorrentInfo, Option<String>)>,
+    /// Pieces hash per info hash; torrents whose pieces could not be read have none.
+    pieces: HashMap<String, String>,
+}
+
+/// How an uploaded torrent relates to the source client's torrents.
+enum Upload<'a> {
+    Seeding(String),
+    Candidate { local: &'a (TorrentInfo, Option<String>), evidence: &'static str, needs_confirmation: bool, note: String },
+    Partial(String),
+    NoMatch,
+}
+
 struct Outcome {
     status: &'static str,
     step: &'static str,
@@ -172,7 +208,9 @@ impl ReseedService {
     }
 
     /// Read the source client, then ask every target site which contents it carries.
-    pub async fn preview(&self, task: &Task, source: ClientConfig, targets: Vec<Site>) -> anyhow::Result<Preview> {
+    /// Read the source client: its complete torrents, the site each belongs to, and
+    /// their pieces hashes where those can be read.
+    async fn scan_source(&self, task: &Task, source: &ClientConfig) -> anyhow::Result<SourceScan> {
         let client = source.create_client();
         task.progress("读取来源下载器", 0, 0);
         let torrents = client.get_torrents().await.context("读不了来源下载器")?;
@@ -201,10 +239,16 @@ impl ReseedService {
         report.unrecognized = into_reasons(unrecognized);
 
         let pieces = self.pieces_hashes(task, client.as_ref(), &complete, &mut report).await?;
+        Ok(SourceScan { client, sites: all_sites, report, complete, pieces })
+    }
+
+    pub async fn preview(&self, task: &Task, source: ClientConfig, targets: Vec<Site>) -> anyhow::Result<Preview> {
+        let SourceScan { report, complete, pieces, .. } = self.scan_source(task, &source).await?;
         let mut preview = Preview {
             source_client_id: source.id.clone(),
             read: report,
             sites: Vec::new(),
+            imports: Vec::new(),
             candidates: Vec::new(),
         };
 
@@ -254,11 +298,67 @@ impl ReseedService {
                     } else {
                         "站点上有 pieces 完全相同的种子，下载后再核对文件布局".into()
                     },
+                    torrent: None,
                 });
             }
             preview.sites.push(site_report);
         }
         task.progress("完成", targets.len(), targets.len());
+        Ok(preview)
+    }
+
+    /// Match uploaded `.torrent` files against the source client's complete torrents.
+    pub async fn import(&self, task: &Task, source: ClientConfig, files: Vec<(String, Vec<u8>)>) -> anyhow::Result<Preview> {
+        let scan = self.scan_source(task, &source).await?;
+        let mut preview = Preview {
+            source_client_id: source.id.clone(),
+            read: scan.report.clone(),
+            sites: Vec::new(),
+            imports: Vec::new(),
+            candidates: Vec::new(),
+        };
+        let mut file_lists = HashMap::new();
+        let total = files.len();
+        for (i, (file, bytes)) in files.into_iter().enumerate() {
+            if task.is_cancelled() {
+                break;
+            }
+            task.progress("比对上传的种子", i, total);
+            let meta = match torrent::parse(&bytes) {
+                Ok(m) => m,
+                Err(e) => {
+                    let detail = e.to_string();
+                    preview.imports.push(ImportReport { file, site: None, outcome: "invalid", detail });
+                    continue;
+                }
+            };
+            let site = meta.tracker_host.as_deref().and_then(|h| site::recognize_host(&scan.sites, h)).map(|s| s.id.clone());
+            let (outcome, detail) = match match_upload(&scan, &meta, site.as_deref(), &mut file_lists).await {
+                Upload::Seeding(why) => ("seeding", why),
+                Upload::Partial(why) => ("partial", why),
+                Upload::NoMatch => ("none", "本地没有找到对应的数据".to_string()),
+                Upload::Candidate { local: (t, source_site), evidence, needs_confirmation, note } => {
+                    preview.candidates.push(Candidate {
+                        id: preview.candidates.len(),
+                        source_hash: t.hash.clone(),
+                        source_name: t.name.clone(),
+                        source_site: source_site.clone(),
+                        save_path: t.save_path.clone(),
+                        size: t.size,
+                        pieces_hash: meta.pieces_hash.clone(),
+                        target_site: site.clone().unwrap_or_default(),
+                        target_torrent_id: String::new(),
+                        evidence,
+                        needs_confirmation,
+                        note: note.clone(),
+                        torrent: Some(Arc::new(bytes)),
+                    });
+                    ("candidate", note)
+                }
+            };
+            preview.imports.push(ImportReport { file, site, outcome, detail });
+        }
+        task.progress("完成", total, total);
         Ok(preview)
     }
 
@@ -454,6 +554,10 @@ impl ReseedService {
         target_id: &str,
         added: &mut HashSet<String>,
     ) -> Outcome {
+        if let Some(bytes) = &candidate.torrent {
+            // An uploaded torrent needs nothing from its site: no download, no daily limit.
+            return self.verify_and_add(candidate, Ok(bytes.to_vec()), source, target, added).await;
+        }
         let site = match site::load(&self.db.conn(), &candidate.target_site) {
             Ok(Some(s)) if s.enabled => s,
             Ok(_) => return Outcome::new("failed", "site", "站点已停用"),
@@ -596,6 +700,76 @@ impl ReseedService {
             add_error.unwrap_or_else(|| "加入后下载器的列表里没有这个种子".into()),
         ))
     }
+}
+
+/// Same pieces beats same files; a same-named torrent with other files is only reported,
+/// since adding it would make the client download into data that is already there.
+async fn match_upload<'a>(
+    scan: &'a SourceScan,
+    meta: &torrent::Metainfo,
+    site: Option<&str>,
+    file_lists: &mut HashMap<String, Option<Vec<(String, u64)>>>,
+) -> Upload<'a> {
+    if scan.complete.iter().any(|(t, _)| t.hash.eq_ignore_ascii_case(&meta.info_hash)) {
+        return Upload::Seeding("下载器里已经有这个种子".into());
+    }
+    let holders: Vec<_> = scan.complete.iter().filter(|(t, _)| scan.pieces.get(&t.hash) == Some(&meta.pieces_hash)).collect();
+    if let Some(site) = site {
+        if holders.iter().any(|(_, s)| s.as_deref() == Some(site)) {
+            return Upload::Seeding(format!("已经在 {site} 做种 pieces 相同的种子"));
+        }
+    }
+    if let Some(local) = holders.iter().find(|(_, s)| s.is_some()).or_else(|| holders.first()) {
+        let needs_confirmation = local.1.is_none();
+        let note = if needs_confirmation {
+            "认不出本地种子来自哪个站，可能就是同一个站".into()
+        } else {
+            format!("与本地「{}」的 pieces 完全相同", local.0.name)
+        };
+        return Upload::Candidate { local, evidence: "pieces_equal", needs_confirmation, note };
+    }
+
+    let mut wanted = meta.files.clone();
+    wanted.sort();
+    let total: u64 = wanted.iter().map(|(_, len)| len).sum();
+    for local in scan.complete.iter().filter(|(t, _)| t.size == total) {
+        if local_files(scan, &local.0.hash, file_lists).await == Some(&wanted) {
+            let note = format!(
+                "pieces 不同（多半是 piece 大小不同），但文件路径与大小都和本地「{}」一致；\
+                 加入后以下载器校验为准，校验不到 100% 不要开始",
+                local.0.name
+            );
+            return Upload::Candidate { local, evidence: "files_equal", needs_confirmation: true, note };
+        }
+    }
+    for (t, _) in scan.complete.iter().filter(|(t, _)| t.name == meta.name) {
+        let Some(have) = local_files(scan, &t.hash, file_lists).await else { continue };
+        let missing: Vec<_> = wanted.iter().filter(|f| !have.contains(f)).collect();
+        let extra = have.iter().filter(|f| !wanted.contains(f)).count();
+        let example = missing.first().map(|(path, _)| format!("，比如 {path}")).unwrap_or_default();
+        return Upload::Partial(format!(
+            "与本地同名种子的文件对不上：缺 {} 个、多 {extra} 个{example}；补下载暂不支持",
+            missing.len()
+        ));
+    }
+    Upload::NoMatch
+}
+
+/// A local torrent's files, sorted, read once per import; `None` when the client fails.
+async fn local_files<'m>(
+    scan: &SourceScan,
+    hash: &str,
+    cache: &'m mut HashMap<String, Option<Vec<(String, u64)>>>,
+) -> Option<&'m Vec<(String, u64)>> {
+    if !cache.contains_key(hash) {
+        let files = scan.client.get_torrent_files(hash).await.ok().map(|files| {
+            let mut f: Vec<_> = files.into_iter().map(|f| (f.name, f.size)).collect();
+            f.sort();
+            f
+        });
+        cache.insert(hash.to_string(), files);
+    }
+    cache.get(hash).and_then(Option::as_ref)
 }
 
 fn concat_hex(hexes: &[String]) -> Option<Vec<u8>> {

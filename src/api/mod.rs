@@ -5,6 +5,7 @@ mod error;
 pub mod handlers;
 
 use axum::{
+    extract::DefaultBodyLimit,
     middleware,
     Router,
     routing::{get, post},
@@ -71,6 +72,8 @@ pub fn create_router(state: AppState) -> Router {
 
         // Reseed
         .route("/reseed/preview", post(handlers::reseed::preview))
+        // Uploaded torrents arrive as base64 JSON: up to 64 MiB in one request.
+        .route("/reseed/import", post(handlers::reseed::import).layer(DefaultBodyLimit::max(64 << 20)))
         .route("/reseed/execute", post(handlers::reseed::execute))
         .route("/reseed/history", get(handlers::reseed::history))
         .route("/tasks/{id}", get(handlers::reseed::task_status))

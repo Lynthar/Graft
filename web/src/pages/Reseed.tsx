@@ -5,12 +5,13 @@ import {
   cancelTask,
   fetchTask,
   startExecute,
+  startImport,
   startPreview,
   type ExecuteSummary,
   type Preview,
   type Task,
 } from '../api/reseed';
-import { statusLabel, stepLabel } from '../labels';
+import { evidenceLabel, importOutcomeLabel, statusLabel, stepLabel } from '../labels';
 
 const formatSize = (bytes: number) => {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -23,6 +24,13 @@ const formatSize = (bytes: number) => {
   return `${size.toFixed(1)} ${units[unit]}`;
 };
 
+const toBase64 = async (file: File) => {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+};
+
 const Reseed: Component = () => {
   const [clients] = createResource(fetchClients);
   const [sites] = createResource(fetchSites);
@@ -30,6 +38,9 @@ const Reseed: Component = () => {
   const [source, setSource] = createSignal('');
   const [target, setTarget] = createSignal('');
   const [targetSites, setTargetSites] = createSignal<string[]>([]);
+  // Either ask sites by pieces hash, or match .torrent files the user downloaded by hand.
+  const [mode, setMode] = createSignal<'lookup' | 'import'>('lookup');
+  const [files, setFiles] = createSignal<File[]>([]);
   const [task, setTask] = createSignal<Task<unknown> | null>(null);
   const [preview, setPreview] = createSignal<{ id: string; data: Preview } | null>(null);
   const [selected, setSelected] = createSignal<number[]>([]);
@@ -70,7 +81,9 @@ const Reseed: Component = () => {
     setPreview(null);
     setSummary(null);
     try {
-      const { task_id } = await startPreview(source(), targetSites());
+      const { task_id } = mode() === 'lookup'
+        ? await startPreview(source(), targetSites())
+        : await startImport(source(), await Promise.all(files().map(async (f) => ({ name: f.name, data: await toBase64(f) }))));
       const t = await follow<Preview>(task_id);
       if (t.result) {
         setPreview({ id: task_id, data: t.result });
@@ -118,24 +131,46 @@ const Reseed: Component = () => {
             </select>
           </label>
 
-          <div>
-            <span class="label-text">去哪些站点查</span>
-            <div class="flex flex-wrap gap-4 mt-2">
-              <For each={usableSites()} fallback={<span class="text-sm">还没有启用的站点，请先到「站点」页设置。</span>}>
-                {(s) => (
-                  <label class="label cursor-pointer gap-2">
-                    <input type="checkbox" class="checkbox checkbox-sm" checked={targetSites().includes(s.id)}
-                      onChange={() => setTargetSites(toggle(targetSites(), s.id))} />
-                    <span class="label-text">{s.name}</span>
-                  </label>
-                )}
-              </For>
-            </div>
+          <div class="join">
+            <button class={`btn btn-sm join-item ${mode() === 'lookup' ? 'btn-active' : ''}`} onClick={() => setMode('lookup')}>
+              向站点查询
+            </button>
+            <button class={`btn btn-sm join-item ${mode() === 'import' ? 'btn-active' : ''}`} onClick={() => setMode('import')}>
+              上传种子文件
+            </button>
           </div>
 
+          <Show when={mode() === 'lookup'}>
+            <div>
+              <span class="label-text">去哪些站点查</span>
+              <div class="flex flex-wrap gap-4 mt-2">
+                <For each={usableSites()} fallback={<span class="text-sm">还没有启用的站点，请先到「站点」页设置。</span>}>
+                  {(s) => (
+                    <label class="label cursor-pointer gap-2">
+                      <input type="checkbox" class="checkbox checkbox-sm" checked={targetSites().includes(s.id)}
+                        onChange={() => setTargetSites(toggle(targetSites(), s.id))} />
+                      <span class="label-text">{s.name}</span>
+                    </label>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
+          <Show when={mode() === 'import'}>
+            <label class="form-control max-w-md">
+              <span class="label-text">从站点手动下载的 .torrent 文件（可多选）</span>
+              <input type="file" class="file-input file-input-bordered" accept=".torrent" multiple
+                onChange={(e) => setFiles([...(e.currentTarget.files ?? [])])} />
+              <span class="label-text-alt mt-1">
+                与来源下载器里已完成的种子比对，不向站点发任何请求。适合直查覆盖不到的站。
+              </span>
+            </label>
+          </Show>
+
           <div class="flex gap-2">
-            <button class="btn btn-primary" disabled={!source() || targetSites().length === 0 || running()} onClick={runPreview}>
-              预览
+            <button class="btn btn-primary" onClick={runPreview}
+              disabled={!source() || running() || (mode() === 'lookup' ? targetSites().length === 0 : files().length === 0)}>
+              {mode() === 'lookup' ? '预览' : `比对 ${files().length} 个文件`}
             </button>
             <Show when={running()}>
               <button class="btn btn-ghost" onClick={() => cancelTask(task()!.id)}>取消</button>
@@ -170,6 +205,14 @@ const Reseed: Component = () => {
                 </div>
                 <For each={p().data.read.unrecognized}>{(r) => <div>未认出 {r.count} 个：{r.reason}</div>}</For>
                 <For each={p().data.read.without_pieces}>{(r) => <div class="text-warning">未查询 {r.count} 个：{r.reason}</div>}</For>
+                <For each={p().data.imports}>
+                  {(r) => (
+                    <div class={r.outcome === 'invalid' ? 'text-error' : r.outcome === 'partial' ? 'text-warning' : ''}>
+                      <span class="font-mono text-xs">{r.file}</span>：{importOutcomeLabel(r.outcome)}
+                      <Show when={r.site}>（{r.site}）</Show>。{r.detail}
+                    </div>
+                  )}
+                </For>
                 <For each={p().data.sites}>
                   {(s) => (
                     <div class={s.error ? 'text-error' : ''}>
@@ -226,11 +269,13 @@ const Reseed: Component = () => {
                           </td>
                           <td class="max-w-xs truncate" title={c.source_name}>{c.source_name}</td>
                           <td>{c.source_site || '?'}</td>
-                          <td>{c.target_site} #{c.target_torrent_id}</td>
+                          <td>
+                            {c.target_site || '未认出的站'} {c.target_torrent_id ? `#${c.target_torrent_id}` : '（上传）'}
+                          </td>
                           <td>{formatSize(c.size)}</td>
                           <td class="text-xs">{c.save_path}</td>
                           <td class="text-xs" title={c.note}>
-                            {c.evidence === 'pieces_equal' ? 'pieces 完全相同' : c.evidence}
+                            {evidenceLabel(c.evidence)}
                             <Show when={c.needs_confirmation}>
                               <div class="text-warning">需单独勾选确认：{c.note}</div>
                             </Show>

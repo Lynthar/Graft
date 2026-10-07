@@ -39,8 +39,7 @@ history, so most of its commits are not mine. Upstream continues at
   to a different client from the one it read.
 - **Different layouts**: when a tracker's torrent names files or folders
   differently, Graft can hard-link your data into the layout it expects, leaving
-  the originals alone, and download files you don't have. Each one is asked
-  separately.
+  the originals alone. Each one is asked separately.
 - **History**: every run records what was added where, what was skipped, and
   what failed at which step.
 - **Easy on trackers**: requests to each tracker are spaced out and downloads
@@ -122,7 +121,8 @@ start-up rather than being ignored.
 - **Hard links need the data at hand.** Graft must see the client's data
   directory, on the same file system as the links, so not with a remote client
   or a container without the data volume.
-- **The interface is in Chinese only.**
+- **No downloading of missing files.** An imported `.torrent` with files you
+  don't have is listed in the preview with what is missing, not added.
 - **No scheduling or notifications.** Cross-seeding is manual: preview, pick,
   add.
 - **Not for the public internet.** There is no TLS; for remote access, put it

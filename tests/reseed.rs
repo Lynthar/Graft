@@ -444,6 +444,68 @@ async fn editing_a_client_keeps_its_password_unless_a_new_one_is_given() {
     assert_eq!(test().await.1["success"], false, "a new password replaces it");
 }
 
+const B_ANNOUNCE: &str = "https://tracker.b.test/announce.php?passkey=SECRET";
+
+#[tokio::test]
+async fn an_uploaded_torrent_with_the_same_pieces_is_added_without_asking_its_site() {
+    let content = movie();
+    let s = setup(std::slice::from_ref(&content), json!({})).await;
+    let (bytes, hash) = content.torrent_announcing(B_ANNOUNCE, "B");
+    s.qb.expect_add(&bytes, &hash);
+
+    let (preview_id, preview) = s.graft.import(&s.client, &[("movie.torrent", &bytes)]).await;
+    assert!(!preview.to_string().contains("SECRET"), "{preview}");
+    assert_eq!(preview["imports"][0]["outcome"], "candidate", "{preview}");
+    assert_eq!(preview["imports"][0]["site"], "b");
+    let candidate = &preview["candidates"][0];
+    assert_eq!((&candidate["evidence"], &candidate["needs_confirmation"]), (&json!("pieces_equal"), &json!(false)));
+
+    let done = execute(&s, &preview_id, &[0]).await;
+    assert_eq!(done["result"]["success"], 1, "{done}");
+    assert_eq!((s.site_b.lookups(), s.site_b.downloads()), (0, 0), "nothing is asked of the site");
+    let history = s.graft.get("/reseed/history").await;
+    assert_eq!((&history[0]["target_site"], &history[0]["target_torrent_id"]), (&json!("b"), &json!("")));
+}
+
+#[tokio::test]
+async fn an_uploaded_torrent_with_other_pieces_but_the_same_files_needs_confirmation() {
+    let content = movie();
+    let s = setup(std::slice::from_ref(&content), json!({})).await;
+    let rehashed = Content { pieces: vec![9u8; 40], ..content.clone() };
+    let (bytes, hash) = rehashed.torrent_announcing(B_ANNOUNCE, "B");
+    s.qb.expect_add(&bytes, &hash);
+
+    let (preview_id, preview) = s.graft.import(&s.client, &[("movie.torrent", &bytes)]).await;
+    let candidate = &preview["candidates"][0];
+    assert_eq!((&candidate["evidence"], &candidate["needs_confirmation"]), (&json!("files_equal"), &json!(true)), "{preview}");
+
+    let body = json!({"preview_id": preview_id, "target_client_id": s.client, "candidate_ids": [0]});
+    assert_eq!(s.graft.post("/reseed/execute", body).await.0, StatusCode::BAD_REQUEST);
+    let body = json!({"preview_id": preview_id, "target_client_id": s.client, "candidate_ids": [0], "confirmed_risky_ids": [0]});
+    let (_, started) = s.graft.post("/reseed/execute", body).await;
+    assert_eq!(s.graft.wait_task(&started).await["result"]["success"], 1);
+}
+
+#[tokio::test]
+async fn uploads_that_are_seeded_partial_unknown_or_broken_are_reported_not_offered() {
+    let content = movie();
+    let s = setup(std::slice::from_ref(&content), json!({})).await;
+    let (seeded, _) = content.torrent("A");
+    let mut bigger = Content::new("bigger", &content.name, &[]);
+    bigger.files = content.files.clone();
+    bigger.files.push(("extra.nfo".into(), 5));
+    let (partial, _) = bigger.torrent_announcing(B_ANNOUNCE, "B");
+    let (unknown, _) = Content::new("other", "Other", &[("o.mkv", 7)]).torrent_announcing(B_ANNOUNCE, "B");
+
+    let files: [(&str, &[u8]); 4] =
+        [("seeded.torrent", &seeded), ("partial.torrent", &partial), ("unknown.torrent", &unknown), ("broken.torrent", b"<html>")];
+    let (_, preview) = s.graft.import(&s.client, &files).await;
+    let outcomes: Vec<&Value> = preview["imports"].as_array().unwrap().iter().map(|r| &r["outcome"]).collect();
+    assert_eq!(outcomes, [&json!("seeding"), &json!("partial"), &json!("none"), &json!("invalid")], "{preview}");
+    assert!(preview["imports"][1]["detail"].as_str().unwrap().contains("缺 1 个"), "{preview}");
+    assert_eq!(preview["candidates"], json!([]));
+}
+
 #[tokio::test]
 async fn failed_downloads_still_wait_for_the_site_rate_limit() {
     let contents = [movie(), Content::new("show", "Show.S01", &[("e01.mkv", 500)])];
