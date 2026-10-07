@@ -18,14 +18,10 @@ pub struct Database {
 }
 
 impl Database {
-    /// Create a new database connection
+    /// Open the database at `path`, creating it and any missing directories readable
+    /// only by the owner: credentials are stored in it in plain text.
     pub fn new(path: &Path) -> Result<Self> {
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .context("Failed to create database directory")?;
-        }
-
+        create_private(path).with_context(|| format!("Failed to create database at {:?}", path))?;
         let conn = Connection::open(path)
             .with_context(|| format!("Failed to open database at {:?}", path))?;
 
@@ -93,6 +89,33 @@ fn run_migrations(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// New directories get 0700 and the database and its WAL files 0600; directories that
+/// already exist are left alone, since the path may point into one the user owns.
+#[cfg(unix)]
+fn create_private(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+    if let Some(dir) = path.parent() {
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    }
+    std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(path)?;
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        if Path::new(&file).exists() {
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_private(path: &Path) -> std::io::Result<()> {
+    match path.parent() {
+        Some(dir) => std::fs::create_dir_all(dir),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +128,31 @@ mod tests {
 
     fn version(conn: &Connection) -> i64 {
         conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_database_and_the_directories_created_for_it_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let root = std::env::temp_dir().join(format!("graft-db-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = root.join("data").join("graft.db");
+
+        let db = Database::new(&path).unwrap();
+        db.migrate().unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&root.join("data/graft.db-wal")), 0o600);
+        assert_eq!(mode(&root.join("data")), 0o700);
+        assert_eq!(mode(&root), 0o755, "a directory that already existed keeps its mode");
+        drop(db);
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        Database::new(&path).unwrap();
+        assert_eq!(mode(&path), 0o600, "an older, readable database is tightened");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

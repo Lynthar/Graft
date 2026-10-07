@@ -250,6 +250,9 @@ const Sites: Component = () => {
                 <input type="checkbox" class="checkbox" checked={form().enabled} onChange={(e) => set('enabled', e.currentTarget.checked)} />
                 <span class="label-text">Enabled</span>
               </label>
+              <p class="text-xs text-base-content/70">
+                Passkeys and authkeys are stored in plain text in Graft's database file, which only its owner can read.
+              </p>
               <Show when={error()}>
                 <div class="alert alert-error text-sm">{error()}</div>
               </Show>
