@@ -122,6 +122,7 @@ start-up rather than being ignored.
 - **Hard links need the data at hand.** Graft must see the client's data
   directory, on the same file system as the links, so not with a remote client
   or a container without the data volume.
+- **The interface is in Chinese only.**
 - **No scheduling or notifications.** Cross-seeding is manual: preview, pick,
   add.
 - **Not for the public internet.** There is no TLS; for remote access, put it

@@ -78,7 +78,7 @@ pub fn create_router(state: AppState) -> Router {
 
         // Stats
         .route("/stats", get(handlers::stats))
-        .fallback(|| async { AppError::not_found("Unknown API endpoint") });
+        .fallback(|| async { AppError::not_found("没有这个接口") });
 
     Router::new()
         .nest("/api", api_routes)

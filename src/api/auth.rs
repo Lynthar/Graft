@@ -42,15 +42,15 @@ pub async fn guard(State(state): State<AppState>, request: Request, next: Next) 
     let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     if state.access.password.is_none() && !is_loopback(host_name(&host)) {
         return refuse(format!(
-            "Graft has no password, so it only answers requests addressed to this machine, not {host:?}. \
-             To reach it from elsewhere, including through a reverse proxy, set GRAFT_PASSWORD."
+            "Graft 没有设置访问密码，只响应发给本机的请求，不响应 {host:?}。\
+             要从别的设备或经反向代理访问，请设置 GRAFT_PASSWORD。"
         ));
     }
     let changes_state = !matches!(*request.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     if changes_state && !origin_matches(headers, &host) {
         return refuse(
-            "Refused a request sent by another site. Behind a reverse proxy, forward the original \
-             Host header (nginx: proxy_set_header Host $host)."
+            "拒绝了来自其他网站的请求。用了反向代理的话，\
+             请转发原始的 Host 头（nginx：proxy_set_header Host $host）。"
                 .to_string(),
         );
     }
@@ -65,7 +65,7 @@ pub async fn guard(State(state): State<AppState>, request: Request, next: Next) 
             }
             response
         }
-        Ok(None) => AppError::new(StatusCode::UNAUTHORIZED, "Log in first").into_response(),
+        Ok(None) => AppError::new(StatusCode::UNAUTHORIZED, "请先登录").into_response(),
         Err(e) => AppError::from(e).into_response(),
     }
 }
@@ -89,12 +89,12 @@ pub struct LoginRequest {
 /// `POST /api/login`: on the right password, starts a session in a cookie.
 pub async fn login(State(state): State<AppState>, Json(req): Json<LoginRequest>) -> Result<Response, AppError> {
     let Some(password) = &state.access.password else {
-        return Err(AppError::bad_request("No password is set, so there is nothing to log in to"));
+        return Err(AppError::bad_request("没有设置访问密码，不需要登录"));
     };
     let _turn = state.access.login.lock().await;
     if !same_secret(&req.password, password.expose()) {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        return Err(AppError::new(StatusCode::UNAUTHORIZED, "Wrong password"));
+        return Err(AppError::new(StatusCode::UNAUTHORIZED, "密码不对"));
     }
     let token = uuid::Uuid::new_v4().simple().to_string();
     let now = chrono::Utc::now().timestamp();

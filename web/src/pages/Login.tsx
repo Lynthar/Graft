@@ -32,15 +32,15 @@ const Login: Component = () => {
         <div class="card-body space-y-4">
           <h1 class="text-2xl font-bold text-primary">🌿 Graft</h1>
           <label class="form-control">
-            <span class="label-text">Password</span>
+            <span class="label-text">密码</span>
             <input type="password" class="input input-bordered" autocomplete="current-password" autofocus
               value={password()} onInput={(e) => setPassword(e.currentTarget.value)} />
           </label>
           <Show when={error()}>
             <div class="alert alert-error text-sm">{error()}</div>
           </Show>
-          <button type="submit" class="btn btn-primary" disabled={busy() || !password()}>Log in</button>
-          <p class="text-xs text-base-content/70">You stay logged in on this device for 30 days after you last used it.</p>
+          <button type="submit" class="btn btn-primary" disabled={busy() || !password()}>登录</button>
+          <p class="text-xs text-base-content/70">在这台设备上最后一次使用后 30 天内保持登录。</p>
         </div>
       </form>
     </div>

@@ -1,22 +1,23 @@
 import { Component, createResource, For } from 'solid-js';
 import { fetchHistory } from '../api/reseed';
+import { statusLabel, stepLabel } from '../labels';
 
 const History: Component = () => {
   const [history] = createResource(() => fetchHistory(100));
 
   return (
     <div>
-      <h1 class="page-title">Reseed History</h1>
+      <h1 class="page-title">辅种历史</h1>
 
       <div class="table-container">
         <table class="table">
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Torrent</th>
-              <th>Target</th>
-              <th>Status</th>
-              <th>Detail</th>
+              <th>时间</th>
+              <th>种子</th>
+              <th>目标</th>
+              <th>结果</th>
+              <th>详情</th>
             </tr>
           </thead>
           <tbody>
@@ -39,11 +40,11 @@ const History: Component = () => {
                       entry.status === 'success' ? 'badge-success' :
                       entry.status === 'failed' ? 'badge-error' : 'badge-warning'
                     }`}>
-                      {entry.status}
+                      {statusLabel(entry.status)}
                     </span>
                   </td>
                   <td class="text-sm text-base-content/70 max-w-md" title={entry.message}>
-                    <span class="font-mono text-xs mr-1">{entry.step}</span>
+                    <span class="badge badge-ghost badge-sm mr-1">{stepLabel(entry.step)}</span>
                     {entry.message}
                   </td>
                 </tr>

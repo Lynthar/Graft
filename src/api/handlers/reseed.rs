@@ -47,11 +47,11 @@ pub async fn preview(
     let source = load_client(&state, &req.source_client_id)?;
     if source.client_type != ClientType::QBittorrent {
         return Err(AppError::bad_request(
-            "Only qBittorrent can be the source: Transmission does not report piece hashes",
+            "只有 qBittorrent 能作来源：Transmission 不提供 piece 哈希",
         ));
     }
     if req.target_site_ids.is_empty() {
-        return Err(AppError::bad_request("Choose at least one target site"));
+        return Err(AppError::bad_request("至少选一个目标站点"));
     }
     let mut targets = Vec::new();
     {
@@ -59,8 +59,8 @@ pub async fn preview(
         for id in &req.target_site_ids {
             match site::load(&conn, id)? {
                 Some(s) if s.enabled => targets.push(s),
-                Some(s) => return Err(AppError::bad_request(format!("The site {} ({id}) is not enabled", s.name))),
-                None => return Err(AppError::bad_request(format!("No site with id {id}"))),
+                Some(s) => return Err(AppError::bad_request(format!("站点 {}（{id}）没有启用", s.name))),
+                None => return Err(AppError::bad_request(format!("没有 id 为 {id} 的站点"))),
             }
         }
     }
@@ -79,7 +79,7 @@ pub async fn execute(
     Json(req): Json<ExecuteRequest>,
 ) -> Result<Json<Started>, AppError> {
     let preview = state.reseed.preview_result(&req.preview_id).ok_or_else(|| {
-        AppError::bad_request("That preview is no longer available; run the preview again")
+        AppError::bad_request("这次预览已失效，请重新预览")
     })?;
     let source = load_client(&state, &preview.source_client_id)?;
     let target = load_client(&state, &req.target_client_id)?;
@@ -94,20 +94,20 @@ pub async fn execute(
             .candidates
             .iter()
             .find(|c| c.id == *id)
-            .ok_or_else(|| AppError::bad_request(format!("The preview has no candidate {id}")))?;
+            .ok_or_else(|| AppError::bad_request(format!("预览里没有候选 {id}")))?;
         if candidate.needs_confirmation && !req.confirmed_risky_ids.contains(id) {
             return Err(AppError::bad_request(format!(
-                "Candidate {id} ({}) needs its own confirmation: {}",
+                "候选 {id}（{}）需要单独确认：{}",
                 candidate.source_name, candidate.note
             )));
         }
         candidates.push(candidate.clone());
     }
     if candidates.is_empty() {
-        return Err(AppError::bad_request("No candidates were confirmed"));
+        return Err(AppError::bad_request("没有确认任何候选"));
     }
     let busy = state.reseed.claim_target(&target.id).ok_or_else(|| {
-        AppError::new(StatusCode::CONFLICT, format!("A reseed into {} is already running", target.name))
+        AppError::new(StatusCode::CONFLICT, format!("{} 已经有一轮辅种在执行", target.name))
     })?;
 
     let service = state.reseed.clone();
@@ -120,7 +120,7 @@ pub async fn task_status(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Snapshot>, AppError> {
-    let task = state.tasks.get(&id).ok_or_else(|| AppError::not_found("No such task"))?;
+    let task = state.tasks.get(&id).ok_or_else(|| AppError::not_found("没有这个任务"))?;
     Ok(Json(task.snapshot()))
 }
 
@@ -129,7 +129,7 @@ pub async fn task_cancel(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if !state.tasks.cancel(&id) {
-        return Err(AppError::not_found("No such task"));
+        return Err(AppError::not_found("没有这个任务"));
     }
     Ok(Json(serde_json::json!({ "cancelling": true })))
 }

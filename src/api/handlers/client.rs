@@ -84,7 +84,7 @@ pub async fn get_one(
         },
     ).optional()?;
 
-    client.map(Json).ok_or_else(|| AppError::not_found("Client not found"))
+    client.map(Json).ok_or_else(|| AppError::not_found("没有这个下载器"))
 }
 
 /// Create a new client
@@ -146,7 +146,7 @@ pub async fn update(
     )?;
 
     if rows == 0 {
-        return Err(AppError::not_found("Client not found"));
+        return Err(AppError::not_found("没有这个下载器"));
     }
 
     Ok(Json(ClientResponse {
@@ -170,7 +170,7 @@ pub async fn remove(
     let rows = conn.execute("DELETE FROM clients WHERE id = ?1", [&id])?;
 
     if rows == 0 {
-        return Err(AppError::not_found("Client not found"));
+        return Err(AppError::not_found("没有这个下载器"));
     }
 
     Ok(Json(serde_json::json!({"deleted": true})))
@@ -187,11 +187,11 @@ pub async fn test(
     match client.test_connection().await {
         Ok(true) => Ok(Json(serde_json::json!({
             "success": true,
-            "message": "Connection successful"
+            "message": "连接成功"
         }))),
         Ok(false) => Ok(Json(serde_json::json!({
             "success": false,
-            "message": "Connection failed"
+            "message": "连接失败"
         }))),
         Err(e) => Ok(Json(serde_json::json!({
             "success": false,
@@ -221,5 +221,5 @@ pub(crate) fn load_client(state: &AppState, id: &str) -> Result<ClientConfig, Ap
             },
         )
         .optional()?;
-    client.ok_or_else(|| AppError::not_found(format!("No download client with id {id}")))
+    client.ok_or_else(|| AppError::not_found(format!("没有 id 为 {id} 的下载器")))
 }

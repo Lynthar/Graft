@@ -211,7 +211,7 @@ async fn a_torrent_from_an_unrecognised_site_needs_its_own_confirmation() {
 
     let (preview_id, preview) = graft.preview(&client, &["b"]).await;
     assert_eq!(preview["candidates"][0]["needs_confirmation"], true);
-    assert_eq!(preview["read"]["unrecognized"][0]["reason"], "no site has the domain tracker.unknown.test");
+    assert_eq!(preview["read"]["unrecognized"][0]["reason"], "没有站点认领域名 tracker.unknown.test");
 
     let body = json!({"preview_id": preview_id, "target_client_id": client, "candidate_ids": [0]});
     let (status, _) = graft.post("/reseed/execute", body).await;
@@ -229,7 +229,7 @@ async fn a_disabled_or_unknown_target_site_is_named_in_the_error() {
     let s = setup(&[movie()], json!({"enabled": false})).await;
     let (status, body) = s.graft.post("/reseed/preview", json!({"source_client_id": s.client, "target_site_ids": ["b"]})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["error"].as_str().unwrap().contains("(b)"), "{body}");
+    assert!(body["error"].as_str().unwrap().contains("（b）"), "{body}");
     let (status, body) = s.graft.post("/reseed/preview", json!({"source_client_id": s.client, "target_site_ids": ["nope"]})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["error"].as_str().unwrap().contains("nope"), "{body}");
@@ -253,8 +253,8 @@ async fn sites_without_the_endpoint_or_rejecting_the_passkey_are_reported_per_si
     let (_, preview) = graft.preview(&client, &["old", "locked"]).await;
     assert!(preview["candidates"].as_array().unwrap().is_empty());
     let errors: Vec<String> = preview["sites"].as_array().unwrap().iter().map(|s| s["error"].to_string()).collect();
-    assert!(errors[0].contains("no pieces-hash endpoint"), "{errors:?}");
-    assert!(errors[1].contains("rejected the passkey"), "{errors:?}");
+    assert!(errors[0].contains("没有 pieces-hash 接口"), "{errors:?}");
+    assert!(errors[1].contains("拒绝了 passkey"), "{errors:?}");
 }
 
 #[tokio::test]
@@ -297,7 +297,7 @@ async fn a_transmission_add_whose_label_fails_is_a_success_with_a_warning() {
     let done = execute_into(&s, &preview_id, &target, &[0]).await;
     let item = &done["result"]["items"][0];
     assert_eq!(item["status"], "success", "{done}");
-    assert!(item["message"].as_str().unwrap().contains("Labels not set"), "{done}");
+    assert!(item["message"].as_str().unwrap().contains("没能打上标签"), "{done}");
 }
 
 #[tokio::test]
@@ -338,7 +338,7 @@ async fn a_lookup_cut_off_mid_response_is_sent_once_more() {
     let sites = preview["sites"].as_array().unwrap();
     assert_eq!(sites[0]["error"], Value::Null, "{preview}");
     assert_eq!(sites[0]["found"], 1, "{preview}");
-    assert!(sites[1]["error"].as_str().unwrap().contains("could not reach the site"), "{preview}");
+    assert!(sites[1]["error"].as_str().unwrap().contains("连不上站点"), "{preview}");
     assert_eq!((flaky.lookups(), down.lookups()), (2, 2), "one resend, no more");
 }
 
