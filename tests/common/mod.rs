@@ -15,7 +15,8 @@ use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Json, Router};
+use base64::Engine;
 use serde_json::{json, Value};
 
 pub const PASSKEY: &str = "0123456789abcdef0123456789abcdef";
@@ -247,6 +248,64 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+// ---------- mock Transmission ----------
+
+const TR_SESSION: &str = "mock-session";
+
+#[derive(Default)]
+pub struct TrState {
+    /// Info hashes of the torrents the client has.
+    pub torrents: HashSet<String>,
+    /// The arguments of every `torrent-add` received.
+    pub adds: Vec<Value>,
+    /// Info hash for each `.torrent` the mock may be handed.
+    pub known: HashMap<Vec<u8>, String>,
+}
+
+#[derive(Clone, Default)]
+pub struct Transmission(pub Arc<Mutex<TrState>>);
+
+impl Transmission {
+    pub fn expect_add(&self, bytes: &[u8], hash: &str) {
+        self.0.lock().unwrap().known.insert(bytes.to_vec(), hash.into());
+    }
+
+    pub fn adds(&self) -> Vec<Value> {
+        self.0.lock().unwrap().adds.clone()
+    }
+
+    pub async fn start(&self) -> SocketAddr {
+        serve(Router::new().route("/transmission/rpc", post(tr_rpc)).with_state(self.clone())).await
+    }
+}
+
+/// The pre-4.1 RPC protocol: a request without the session id gets a 409 that hands it out.
+async fn tr_rpc(State(tr): State<Transmission>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
+    if headers.get("X-Transmission-Session-Id").and_then(|v| v.to_str().ok()) != Some(TR_SESSION) {
+        return (StatusCode::CONFLICT, [("X-Transmission-Session-Id", TR_SESSION)]).into_response();
+    }
+    let args = &body["arguments"];
+    let mut s = tr.0.lock().unwrap();
+    let arguments = match body["method"].as_str() {
+        Some("torrent-add") => {
+            s.adds.push(args.clone());
+            let bytes = base64::engine::general_purpose::STANDARD.decode(args["metainfo"].as_str().unwrap()).unwrap();
+            let Some(hash) = s.known.get(&bytes).cloned() else {
+                return Json(json!({"result": "invalid or corrupt torrent file"})).into_response();
+            };
+            let key = if s.torrents.insert(hash.clone()) { "torrent-added" } else { "torrent-duplicate" };
+            json!({key: {"id": 1, "name": "x", "hashString": hash}})
+        }
+        Some("torrent-get") => {
+            let ids: Vec<&str> = args["ids"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            let found: Vec<Value> = ids.iter().filter(|h| s.torrents.contains(**h)).map(|h| json!({"hashString": h})).collect();
+            json!({"torrents": found})
+        }
+        _ => return Json(json!({"result": "method name not recognized"})).into_response(),
+    };
+    Json(json!({"result": "success", "arguments": arguments})).into_response()
+}
+
 // ---------- mock NexusPHP site ----------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -455,6 +514,14 @@ impl Graft {
     pub async fn add_qb(&self, addr: SocketAddr) -> String {
         let (status, body) = self
             .post("/clients", json!({"name": "qb", "client_type": "qbittorrent", "host": "127.0.0.1", "port": addr.port(), "username": "u", "password": "p"}))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["id"].as_str().unwrap().to_string()
+    }
+
+    pub async fn add_transmission(&self, addr: SocketAddr) -> String {
+        let (status, body) = self
+            .post("/clients", json!({"name": "tr", "client_type": "transmission", "host": "127.0.0.1", "port": addr.port()}))
             .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         body["id"].as_str().unwrap().to_string()

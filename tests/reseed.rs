@@ -36,9 +36,13 @@ async fn setup(contents: &[Content], site_b_extra: Value) -> Setup {
 }
 
 async fn execute(s: &Setup, preview_id: &str, ids: &[u64]) -> Value {
+    execute_into(s, preview_id, &s.client, ids).await
+}
+
+async fn execute_into(s: &Setup, preview_id: &str, target: &str, ids: &[u64]) -> Value {
     let (status, started) = s
         .graft
-        .post("/reseed/execute", json!({"preview_id": preview_id, "target_client_id": s.client, "candidate_ids": ids}))
+        .post("/reseed/execute", json!({"preview_id": preview_id, "target_client_id": target, "candidate_ids": ids}))
         .await;
     assert_eq!(status, StatusCode::OK, "{started}");
     s.graft.wait_task(&started).await
@@ -251,6 +255,31 @@ async fn sites_without_the_endpoint_or_rejecting_the_passkey_are_reported_per_si
     let errors: Vec<String> = preview["sites"].as_array().unwrap().iter().map(|s| s["error"].to_string()).collect();
     assert!(errors[0].contains("no pieces-hash endpoint"), "{errors:?}");
     assert!(errors[1].contains("rejected the passkey"), "{errors:?}");
+}
+
+#[tokio::test]
+async fn a_match_is_added_to_transmission_paused_at_the_source_path_and_only_once() {
+    let content = movie();
+    let s = setup(std::slice::from_ref(&content), json!({})).await;
+    let (bytes, b_hash) = s.site_b.publish(&content, "77", "B");
+    let tr = Transmission::default();
+    tr.expect_add(&bytes, &b_hash);
+    let target = s.graft.add_transmission(tr.start().await).await;
+
+    let (preview_id, preview) = s.graft.preview(&s.client, &["b"]).await;
+    assert_eq!(preview["candidates"].as_array().unwrap().len(), 1, "{preview}");
+    let first = execute_into(&s, &preview_id, &target, &[0]).await;
+    assert_eq!(first["result"]["success"], 1, "{first}");
+    let adds = tr.adds();
+    assert_eq!(adds.len(), 1);
+    assert_eq!(adds[0]["paused"], true);
+    assert_eq!(adds[0]["download-dir"], "/data/a");
+    assert_eq!(adds[0]["labels"], json!(["graft"]));
+
+    let again = execute_into(&s, &preview_id, &target, &[0]).await;
+    assert_eq!(again["result"]["skipped"], 1, "{again}");
+    assert_eq!(again["result"]["items"][0]["step"], "exists", "{again}");
+    assert_eq!((tr.adds().len(), s.site_b.downloads()), (1, 1), "the rerun only asks the client");
 }
 
 #[tokio::test]
