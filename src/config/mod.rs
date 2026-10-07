@@ -92,12 +92,6 @@ impl Settings {
         // Override with environment variables
         settings.apply_env_overrides()?;
 
-        // Ensure data directory exists
-        if let Some(parent) = settings.database.path.parent() {
-            std::fs::create_dir_all(parent)
-                .context("Failed to create data directory")?;
-        }
-
         Ok(settings)
     }
 

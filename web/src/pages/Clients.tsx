@@ -220,6 +220,10 @@ const Clients: Component = () => {
                 </label>
               </div>
 
+              <p class="text-xs text-base-content/70 mb-4">
+                The password is stored in plain text in Graft's database file, which only its owner can read.
+              </p>
+
               <div class="modal-action">
                 <button type="button" class="btn" onClick={() => setShowModal(false)}>
                   Cancel
