@@ -2,10 +2,12 @@
 # Copy this file to config.toml and customize as needed
 
 [server]
-# Host to bind to. There is no authentication, so keep it on loopback.
+# Host to bind to. Any address other than loopback needs a password.
 host = "127.0.0.1"
 # Port to listen on
 port = 3000
+# Access password; required when host is not loopback. GRAFT_PASSWORD overrides it.
+# password = "choose-a-password"
 
 [database]
 # Path to SQLite database file

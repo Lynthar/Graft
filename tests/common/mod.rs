@@ -439,7 +439,10 @@ impl Drop for Graft {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        // `restart` hands the directory on and leaves this one empty.
+        if !self.dir.as_os_str().is_empty() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -458,6 +461,7 @@ pub fn graft_command(dir: &PathBuf, port: u16) -> Command {
         .env("GRAFT_PORT", port.to_string())
         .env("GRAFT_DATA_DIR", dir.join("data"))
         .env("RUST_LOG", "graft=warn")
+        .env_remove("GRAFT_PASSWORD")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     cmd
@@ -465,13 +469,17 @@ pub fn graft_command(dir: &PathBuf, port: u16) -> Command {
 
 impl Graft {
     pub async fn start() -> Graft {
-        let dir = temp_dir();
-        let http = reqwest::Client::new();
+        Self::start_in(temp_dir(), &[]).await
+    }
+
+    /// Start on `dir` with extra environment variables.
+    pub async fn start_in(dir: PathBuf, env: &[(&str, &str)]) -> Graft {
+        let http = reqwest::Client::builder().cookie_store(true).build().unwrap();
         let mut stderr = String::new();
         // The port is free when picked, but another socket can take it before graft binds it.
         for _ in 0..5 {
             let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-            let mut child = graft_command(&dir, port).spawn().unwrap();
+            let mut child = graft_command(&dir, port).envs(env.iter().copied()).spawn().unwrap();
             let base = format!("http://127.0.0.1:{port}/api");
             for _ in 0..100 {
                 let health = http.get(format!("{base}/health")).send().await;
@@ -489,6 +497,23 @@ impl Graft {
             std::io::Read::read_to_string(child.stderr.as_mut().unwrap(), &mut stderr).unwrap();
         }
         panic!("graft did not start:\n{stderr}");
+    }
+
+    /// Stop this instance and start another on the same data directory, keeping cookies.
+    pub async fn restart(mut self, env: &[(&str, &str)]) -> Graft {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let dir = std::mem::take(&mut self.dir);
+        let http = self.http.clone();
+        drop(self);
+        let mut next = Self::start_in(dir, env).await;
+        next.http = http;
+        next
+    }
+
+    /// `host:port` this instance listens on.
+    pub fn authority(&self) -> &str {
+        self.base.trim_start_matches("http://").trim_end_matches("/api")
     }
 
     pub async fn call(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> (StatusCode, Value) {

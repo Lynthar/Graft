@@ -73,6 +73,15 @@ CREATE TABLE reseed_results (
 CREATE INDEX idx_results_created ON reseed_results(created_at DESC);
 CREATE INDEX idx_results_site_day ON reseed_results(target_site, created_at);
 
+-- Login sessions, used only when an access password is set. password_check is
+-- sha1(token, password), so a changed password ends every session.
+CREATE TABLE sessions (
+    token TEXT PRIMARY KEY,
+    password_check TEXT NOT NULL,
+    -- Unix seconds.
+    expires_at INTEGER NOT NULL
+);
+
 INSERT INTO sites (id, name, base_url, template_type, download_pattern, builtin) VALUES
     ('mteam', 'M-Team', 'https://kp.m-team.cc', 'nexusphp', '/download.php?id={id}&passkey={passkey}', 1),
     ('hdsky', 'HDSky', 'https://hdsky.me', 'nexusphp', '/download.php?id={id}&passkey={passkey}', 1),
