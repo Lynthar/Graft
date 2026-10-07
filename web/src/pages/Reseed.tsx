@@ -42,6 +42,20 @@ const Reseed: Component = () => {
 
   const toggle = <T,>(list: T[], item: T) => (list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
 
+  // Candidate ids by save path, so a whole directory can be left out at once.
+  const byDir = createMemo(() => {
+    const dirs = new Map<string, number[]>();
+    for (const c of preview()?.data.candidates ?? []) dirs.set(c.save_path, [...(dirs.get(c.save_path) ?? []), c.id]);
+    return [...dirs.entries()].sort(([a], [b]) => a.localeCompare(b));
+  });
+  const risky = createMemo(() => new Set((preview()?.data.candidates ?? []).filter((c) => c.needs_confirmation).map((c) => c.id)));
+  const chosenIn = (ids: number[]) => ids.filter((id) => selected().includes(id)).length;
+  // Taking a directory back in skips the candidates that need their own confirmation.
+  const toggleDir = (ids: number[]) =>
+    setSelected(chosenIn(ids)
+      ? selected().filter((id) => !ids.includes(id))
+      : [...selected(), ...ids.filter((id) => !risky().has(id))]);
+
   const follow = async <T,>(taskId: string): Promise<Task<T>> => {
     for (;;) {
       const t = await fetchTask<T>(taskId);
@@ -174,6 +188,21 @@ const Reseed: Component = () => {
                 <button class="btn btn-xs" onClick={() => setSelected([])}>全不选</button>
                 <span class="text-sm self-center">已选 {selected().length} / {p().data.candidates.length}</span>
               </div>
+              <Show when={byDir().length > 1}>
+                <div class="text-sm">
+                  <span class="mr-2">按保存目录：</span>
+                  <For each={byDir()}>
+                    {([dir, ids]) => (
+                      <label class="label cursor-pointer inline-flex gap-2 mr-4">
+                        <input type="checkbox" class="checkbox checkbox-sm" checked={chosenIn(ids) > 0}
+                          onChange={() => toggleDir(ids)} />
+                        <span class="label-text font-mono text-xs">{dir}</span>
+                        <span class="label-text text-xs">（{chosenIn(ids)} / {ids.length}）</span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+              </Show>
               <div class="overflow-x-auto">
                 <table class="table table-sm">
                   <thead>
