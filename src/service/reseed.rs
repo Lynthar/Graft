@@ -583,7 +583,11 @@ impl ReseedService {
             }
             if let Ok(true) = target.has_torrent(&meta.info_hash).await {
                 added.insert(meta.info_hash.clone());
-                return with_hash(Outcome::new("success", "added", "added stopped; the client checks the data before it seeds"));
+                let mut message = "added stopped; the client checks the data before it seeds".to_string();
+                if let Some(e) = &add_error {
+                    message.push_str(&format!(". Warning: {e}"));
+                }
+                return with_hash(Outcome::new("success", "added", message));
             }
         }
         with_hash(Outcome::new(

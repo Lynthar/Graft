@@ -275,11 +275,46 @@ async fn a_match_is_added_to_transmission_paused_at_the_source_path_and_only_onc
     assert_eq!(adds[0]["paused"], true);
     assert_eq!(adds[0]["download-dir"], "/data/a");
     assert_eq!(adds[0]["labels"], json!(["graft"]));
+    assert_eq!(tr.labels(&b_hash), Some(json!(["graft"])), "3.x only takes labels from torrent-set");
 
     let again = execute_into(&s, &preview_id, &target, &[0]).await;
     assert_eq!(again["result"]["skipped"], 1, "{again}");
     assert_eq!(again["result"]["items"][0]["step"], "exists", "{again}");
     assert_eq!((tr.adds().len(), s.site_b.downloads()), (1, 1), "the rerun only asks the client");
+}
+
+#[tokio::test]
+async fn a_transmission_add_whose_label_fails_is_a_success_with_a_warning() {
+    let content = movie();
+    let s = setup(std::slice::from_ref(&content), json!({})).await;
+    let (bytes, b_hash) = s.site_b.publish(&content, "77", "B");
+    let tr = Transmission::default();
+    tr.expect_add(&bytes, &b_hash);
+    tr.0.lock().unwrap().fail_set = true;
+    let target = s.graft.add_transmission(tr.start().await).await;
+
+    let (preview_id, _) = s.graft.preview(&s.client, &["b"]).await;
+    let done = execute_into(&s, &preview_id, &target, &[0]).await;
+    let item = &done["result"]["items"][0];
+    assert_eq!(item["status"], "success", "{done}");
+    assert!(item["message"].as_str().unwrap().contains("Labels not set"), "{done}");
+}
+
+#[tokio::test]
+async fn a_torrent_the_user_adds_to_transmission_meanwhile_keeps_its_labels() {
+    let content = movie();
+    let s = setup(std::slice::from_ref(&content), json!({})).await;
+    let (bytes, b_hash) = s.site_b.publish(&content, "77", "B");
+    let tr = Transmission::default();
+    tr.expect_add(&bytes, &b_hash);
+    tr.0.lock().unwrap().racing.insert(b_hash.clone());
+    let target = s.graft.add_transmission(tr.start().await).await;
+
+    let (preview_id, _) = s.graft.preview(&s.client, &["b"]).await;
+    let done = execute_into(&s, &preview_id, &target, &[0]).await;
+    let item = &done["result"]["items"][0];
+    assert_eq!((&item["status"], &item["step"]), (&json!("skipped"), &json!("exists")), "{done}");
+    assert_eq!(tr.labels(&b_hash), Some(json!(["mine"])));
 }
 
 #[tokio::test]

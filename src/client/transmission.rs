@@ -10,6 +10,7 @@ use super::{
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::{Client, StatusCode};
+use serde::de::IgnoredAny;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -135,7 +136,13 @@ impl BitTorrentClient for TransmissionClient {
         });
         let response: AddTorrentResponse = self.rpc_call("torrent-add", args).await?;
         match (response.torrent_added, response.torrent_duplicate) {
-            (Some(_), _) => Ok(()),
+            // 3.x ignores `labels` on torrent-add, so set them again. Never on a duplicate:
+            // torrent-set replaces the labels of what is the user's own torrent.
+            (Some(added), _) => {
+                let args = json!({ "ids": [added.hash_string], "labels": options.tags });
+                let set: Result<IgnoredAny> = self.rpc_call("torrent-set", args).await;
+                set.map(|_| ()).map_err(|e| ClientError::LabelsNotSet(e.to_string()))
+            }
             (None, Some(_)) => Err(ClientError::Duplicate),
             (None, None) => Err(ClientError::InvalidResponse("torrent-add returned no torrent".into())),
         }
@@ -211,7 +218,7 @@ struct HashOnly {
 #[derive(Debug, Deserialize)]
 struct AddTorrentResponse {
     #[serde(rename = "torrent-added")]
-    torrent_added: Option<serde_json::Value>,
+    torrent_added: Option<HashOnly>,
     #[serde(rename = "torrent-duplicate")]
     torrent_duplicate: Option<serde_json::Value>,
 }
