@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use tokio::sync::Notify;
@@ -62,6 +63,11 @@ impl Task {
             }
             notified.await;
         }
+    }
+
+    fn request_cancel(&self) {
+        self.cancel_requested.store(true, Ordering::SeqCst);
+        self.cancel_notify.notify_waiters();
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -130,9 +136,31 @@ impl TaskRegistry {
     /// Ask a running task to stop at its next checkpoint. Returns false if it is unknown.
     pub fn cancel(&self, id: &str) -> bool {
         let Some(task) = self.get(id) else { return false };
-        task.cancel_requested.store(true, Ordering::SeqCst);
-        task.cancel_notify.notify_waiters();
+        task.request_cancel();
         true
+    }
+
+    /// Ask every running task to stop at its next checkpoint.
+    pub fn cancel_all(&self) {
+        self.running().iter().for_each(|t| t.request_cancel());
+    }
+
+    /// Cancel every running task, then wait up to `grace` for them to finish.
+    /// Returns false if some were still running when the time ran out.
+    pub async fn shut_down(&self, grace: Duration) -> bool {
+        self.cancel_all();
+        let running = self.running();
+        let all_finished = async {
+            while running.iter().any(|t| t.snapshot().status == Status::Running) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        };
+        tokio::time::timeout(grace, all_finished).await.is_ok()
+    }
+
+    fn running(&self) -> Vec<Arc<Task>> {
+        let tasks = self.tasks.lock().expect("task list poisoned");
+        tasks.iter().filter(|t| t.snapshot().status == Status::Running).cloned().collect()
     }
 
     fn insert(&self, task: Arc<Task>) {
@@ -150,7 +178,6 @@ impl TaskRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     async fn wait_until_finished(task: &Task) -> Snapshot {
         for _ in 0..100 {
@@ -177,6 +204,30 @@ mod tests {
         let snap = wait_until_finished(&task).await;
         assert_eq!(snap.status, Status::Cancelled);
         assert_eq!(snap.result, Some(serde_json::json!("partial")));
+    }
+
+    #[tokio::test]
+    async fn shutting_down_cancels_running_tasks_and_waits_for_them() {
+        let registry = Arc::new(TaskRegistry::default());
+        let task = registry.spawn("test", |task| async move {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+                _ = task.cancelled() => {}
+            }
+            Ok(())
+        });
+        assert!(registry.shut_down(Duration::from_secs(5)).await);
+        assert_eq!(task.snapshot().status, Status::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn shutting_down_gives_up_on_a_task_that_ignores_cancellation() {
+        let registry = Arc::new(TaskRegistry::default());
+        registry.spawn("test", |_| async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok(())
+        });
+        assert!(!registry.shut_down(Duration::from_millis(100)).await);
     }
 
     #[tokio::test]

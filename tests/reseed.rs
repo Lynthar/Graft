@@ -383,6 +383,41 @@ async fn cancelling_keeps_what_was_added_and_a_rerun_only_does_the_rest() {
     assert_eq!(s.qb.0.lock().unwrap().adds.len(), 3);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn sigterm_finishes_the_torrent_in_flight_records_it_and_exits_cleanly() {
+    let contents = [
+        movie(),
+        Content::new("show", "Show.S01", &[("e01.mkv", 500)]),
+        Content::new("album", "Album", &[("01.flac", 300)]),
+    ];
+    let mut s = setup(&contents, json!({})).await;
+    for (i, c) in contents.iter().enumerate() {
+        let (bytes, hash) = s.site_b.publish(c, &format!("{}", 60 + i), "B");
+        s.qb.expect_add(&bytes, &hash);
+    }
+    s.site_b.0.lock().unwrap().download_delay = Duration::from_secs(2);
+    let (preview_id, _) = s.graft.preview(&s.client, &["b"]).await;
+    let body = json!({"preview_id": preview_id, "target_client_id": s.client, "candidate_ids": [0, 1, 2]});
+    s.graft.post("/reseed/execute", body).await;
+    for _ in 0..400 {
+        if s.site_b.downloads() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let (status, took) = s.graft.terminate().await;
+    assert!(status.success(), "{status}");
+    assert!(took < Duration::from_secs(6), "waited {took:?}, not just for the download in flight");
+    assert_eq!((s.site_b.downloads(), s.qb.0.lock().unwrap().adds.len()), (2, 2));
+    let graft = s.graft.restart(&[]).await;
+    let history = graft.get("/reseed/history").await;
+    let rows = history.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{history}");
+    assert!(rows.iter().all(|r| r["status"] == "success"), "{history}");
+}
+
 #[tokio::test]
 async fn failed_downloads_still_wait_for_the_site_rate_limit() {
     let contents = [movie(), Content::new("show", "Show.S01", &[("e01.mkv", 500)])];
