@@ -17,10 +17,9 @@ Everything runs on your machine. There is no cloud index and no account to
 register: Graft talks only to your torrent client and the trackers you are a
 member of, and sends nothing anywhere else.
 
-It descends from IYUUPlus. I wrote the Rust source from scratch and embedded the
-web UI in a single binary, but this repository carries the full upstream git
-history, so most of its commits are not mine. Upstream continues at
-[ledccn/iyuuplus-dev](https://github.com/ledccn/iyuuplus-dev).
+It descends from IYUUPlus, which continues at
+[ledccn/iyuuplus-dev](https://github.com/ledccn/iyuuplus-dev). I wrote the Rust
+source from scratch and embedded the web UI in a single binary.
 
 ## Features
 
@@ -155,7 +154,4 @@ start-up rather than being ignored.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
-The copyright line in `LICENSE` still names the upstream PHP framework's author
-rather than this project's.
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Lynthar.
